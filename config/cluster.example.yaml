@@ -1,0 +1,71 @@
+# Per-cluster config for claude-remote-watcher. Lives at
+# ~/.config/claude-watcher/cluster.yaml (never inside a watched directory).
+# Anything here can be overridden per directory in <dir>/.watcher/watcher.yaml
+# (same keys, deep-merged).
+
+slurm:
+  partition: fnsw            # CHANGE: a cheap partition that tolerates long-lived CPU jobs
+  qos: fnsw_qos              # CHANGE (or null)
+  gres: "gpu:0"              # CHANGE: null to omit; some clusters reject 0-GPU jobs -> "gpu:1"
+  cpus: 2
+  mem: 4G
+  time: "1-00:00:00"         # the watcher chains a fresh allocation before this expires
+  chain_margin_min: 60       # exit this many minutes before `time` (successor is already queued)
+  extra_sbatch: []           # e.g. ["--exclude=node1,node2", "--account=foo"]
+  job_name_prefix: "cw"      # watcher jobs are named "<prefix>:<dirname>"
+
+claude:
+  bin: claude
+  # Model + per-turn budget for each kind of Claude turn. Any model alias or
+  # full model id the `claude` CLI accepts.
+  tiers:
+    tier2:   {model: sonnet, budget_usd: 3}   # trivial-crash diagnose+patch+resubmit
+    tier3:   {model: opus,   budget_usd: 6}   # everything else: diagnose, propose, escalate
+    chat:    {model: sonnet, budget_usd: 3}   # replies to your Slack messages / standing orders
+    compact: {model: haiku,  budget_usd: 1}   # agent_notes.md compaction
+    report:  {model: haiku,  budget_usd: 1}   # optional prose summary in the daily digest
+  turn_timeout_min: 40
+  quota_backoff_min: 30
+  remote_control:
+    enabled: true
+    permission_mode: acceptEdits
+    recycle_idle_hours: 12      # restart the remote-control server after this much idle
+
+slack:
+  bot_token_file: ~/.config/claude-watcher/slack_bot_token   # xoxb-...  (chat:write, im:write, im:history)
+  user_id_file:   ~/.config/claude-watcher/slack_user_id     # U...      sole recipient
+  app_token_file: ~/.config/claude-watcher/slack_app_token   # xapp-...  Socket Mode; enables inbound
+  thread_per_job: true
+
+watcher:
+  poll_interval_sec: 300
+  idle_poll_interval_sec: 1800     # when no live jobs
+  lookback_days: 2                 # adopt jobs submitted this long before `watch start`
+  report_hour: 9                   # daily digest, local time
+  timezone: America/New_York
+  report_llm_summary: false        # add a short Claude-written paragraph to the digest
+  notes_max_kb: 24                 # compact agent_notes.md beyond this
+  stall_min: 60                    # RUNNING with no stdout growth for this long -> STALLED
+  max_attempts: 3                  # tier-0/1 resubmits per job lineage
+  mem_bump: 1.5                    # OOM: multiply --mem by this
+  max_mem_gb: 480
+  log_tail_lines: 150
+  # Regexes (search on the last log_tail_lines) that mark a crash as "trivial" -> tier 2.
+  trivial_patterns:
+    - "ModuleNotFoundError"
+    - "ImportError"
+    - "FileNotFoundError"
+    - "No such file or directory"
+    - "NameError"
+    - "SyntaxError"
+    - "IndentationError"
+    - "AttributeError: module .* has no attribute"
+    - "TypeError: .* got an unexpected keyword argument"
+    - "KeyError: '[A-Za-z_]+'"
+    - "unrecognized arguments"
+  oom_patterns:
+    - "CUDA out of memory"
+    - "OutOfMemoryError"
+    - "oom-kill"
+    - "Out of memory"
+    - "MemoryError"

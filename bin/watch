@@ -1,0 +1,9 @@
+#!/bin/bash
+# Thin launcher: resolve the repo (following the symlink), use its venv.
+set -euo pipefail
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO="$(cd "$(dirname "$SELF")/.." && pwd)"
+if [ -x "$REPO/.venv/bin/python" ]; then PY="$REPO/.venv/bin/python"; else PY=python3; fi
+export CLAUDE_WATCHER_REPO="$REPO"
+export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m watcher.cli "$@"

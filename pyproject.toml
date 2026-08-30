@@ -1,0 +1,16 @@
+[project]
+name = "claude-remote-watcher"
+version = "0.1.0"
+description = "Drop-in Slurm experiment watcher driven by Claude Code: auto-fixes easy failures, pings Slack, chats from claude.ai."
+requires-python = ">=3.9"
+dependencies = ["pyyaml>=6", "slack_sdk>=3.27"]
+
+[project.scripts]
+watch = "watcher.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["watcher"]

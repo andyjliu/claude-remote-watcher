@@ -1,0 +1,1 @@
+The deterministic fixer already retried this lineage {{ATTEMPTS}} times; it keeps failing the same way. Do not resubmit again. Find out why (read the full failure pattern across attempts in your notes and the logs), propose what should change, and ESCALATE.

@@ -1,0 +1,22 @@
+{
+  "_comment": "Rendered per watched dir into .watcher/settings.json. Deny rules hold even under bypassPermissions.",
+  "permissions": {
+    "deny": [
+      "Bash(rm:*)", "Bash(rmdir:*)", "Bash(shred:*)", "Bash(mv:* /*)",
+      "Bash(srun:*)", "Bash(salloc:*)", "Bash(scancel -u:*)", "Bash(scancel --user:*)",
+      "Bash(git commit:*)", "Bash(git push:*)", "Bash(git merge:*)", "Bash(git rebase:*)", "Bash(git reset:*)",
+      "Bash(git clean:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git stash:*)", "Bash(git submodule:*)",
+      "Bash(pip install:*)", "Bash(pip3 install:*)", "Bash(uv pip install:*)", "Bash(uv add:*)", "Bash(conda install:*)",
+      "Bash(crontab:*)", "Bash(scrontab:*)",
+      "Edit(//{{STATE}}/settings.json)", "Write(//{{STATE}}/settings.json)",
+      "Edit(//{{STATE}}/watcher.yaml)", "Write(//{{STATE}}/watcher.yaml)",
+      "Edit(//{{STATE}}/jobs.json)", "Write(//{{STATE}}/jobs.json)",
+      "Edit(//{{STATE}}/meta.json)", "Write(//{{STATE}}/meta.json)",
+      "Edit(//{{STATE}}/CLAUDE.md)", "Write(//{{STATE}}/CLAUDE.md)",
+      "Edit(//{{STATE}}/watcher.sbatch)", "Write(//{{STATE}}/watcher.sbatch)",
+      "Edit(//{{STATE}}/turns/**)", "Write(//{{STATE}}/turns/**)",
+      "Edit(//{{CONF_DIR}}/**)", "Write(//{{CONF_DIR}}/**)",
+      "Edit(//{{REPO}}/**)", "Write(//{{REPO}}/**)"
+    ]
+  }
+}

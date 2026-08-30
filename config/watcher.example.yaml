@@ -1,0 +1,8 @@
+# Optional per-directory overrides, placed at <dir>/.watcher/watcher.yaml.
+# Same schema as cluster.yaml; only the keys you set are overridden.
+watcher:
+  poll_interval_sec: 300
+  stall_min: 90
+claude:
+  tiers:
+    tier3: {model: opus, budget_usd: 8}
