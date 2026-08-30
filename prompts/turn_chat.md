@@ -8,7 +8,7 @@ Received {{RECEIVED}} via {{SOURCE}}{{SCOPE}}:
 > {{TEXT}}
 
 ## Context
-Current jobs summary (from jobs.json):
+Current jobs (last 24h + live, from jobs.json):
 ```
 {{SUMMARY}}
 ```

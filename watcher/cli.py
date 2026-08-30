@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import config, slurm
 from .config import CONF_DIR, REPO, get
-from .report import digest, table
+from .report import digest, status, table
 from .state import State, now_iso
 
 SBATCH_BODY = """#!/bin/bash
@@ -111,8 +111,7 @@ def cmd_status(a):
     for s in ("STOP", "BLOCKED"):
         if st.sentinel(s):
             print(f"!! {s}: {(st.dir / s).read_text().strip()}")
-    print(f"slack inbound: {st.meta.get('slack_inbound')}  started: {st.meta.get('started_at')}")
-    print(table(st))
+    print(status(st, cfg["_target"], a.hours).replace("\n```", "").replace("```\n", ""))
 
 
 def cmd_say(a):
@@ -153,7 +152,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("start", help="start watching a directory (idempotent)"); p.add_argument("dir"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_start)
     p = sub.add_parser("stop", help="stop the watcher for a directory"); p.add_argument("dir"); p.add_argument("--now", action="store_true", help="scancel immediately"); p.set_defaults(f=cmd_stop)
-    p = sub.add_parser("status", help="watcher + job table"); p.add_argument("dir"); p.set_defaults(f=cmd_status)
+    p = sub.add_parser("status", help="watcher + job table"); p.add_argument("dir"); p.add_argument("--hours", type=float, default=24, help="show jobs changed within this window (live jobs always)"); p.set_defaults(f=cmd_status)
     p = sub.add_parser("say", help="send the watcher a message (like a Slack DM)"); p.add_argument("dir"); p.add_argument("text", nargs="+"); p.set_defaults(f=cmd_say)
     p = sub.add_parser("report", help="print the digest"); p.add_argument("dir"); p.add_argument("--slack", action="store_true"); p.set_defaults(f=cmd_report)
     p = sub.add_parser("render", help="show effective config and sbatch line"); p.add_argument("dir"); p.set_defaults(f=cmd_render)

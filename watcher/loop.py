@@ -16,7 +16,7 @@ from . import directives, fixes, logs, slurm, triage
 from .claude_turn import REPO, render, run_turn
 from .compact import maybe_compact
 from .config import get, path as cfg_path
-from .report import digest, table
+from .report import digest, status, table
 from .slack import Slack
 from .state import State, now_iso
 
@@ -309,6 +309,7 @@ class Loop:
         text = res["slack"] or res["result"][-1500:]
         if rec is not None:
             rec["handled"] = True
+            rec["last_status"] = status
             if rec.get("klass") == "STALLED":
                 rec["stall_reported"] = True
             if status == "ESCALATE":
@@ -367,8 +368,11 @@ class Loop:
         """Commands answered without a Claude turn."""
         t = text.lower().strip()
         if t in ("status", "report"):
-            body = digest(self.state, str(self.target)) if t == "report" else f"```\n{table(self.state)}\n```"
+            body = digest(self.state, str(self.target)) if t == "report" else status(self.state, str(self.target))
             self.slack.post(body, thread_ts=thread); return True
+        m = re.match(r"^status\s+(\d+)h$", t)
+        if m:
+            self.slack.post(status(self.state, str(self.target), float(m.group(1))), thread_ts=thread); return True
         if t == "stop":
             (self.state.dir / "STOP").write_text(f"{now_iso()}: stop via slack\n")
             self.slack.post("stopping watcher (touch-remove STOP or `watch start` to resume)", thread_ts=thread); return True
@@ -404,6 +408,8 @@ class Loop:
         st.meta.setdefault("started_at", now_iso())
         if "last_report_date" not in st.meta:  # no digest on the day the watcher starts
             st.meta["last_report_date"] = datetime.now(self.tz).strftime("%Y-%m-%d")
+        st.meta["watcher_job"] = self.my_id or "local"
+        st.meta["watcher_started"] = now_iso()
         st.logline(f"watcher loop up (job {self.my_id or 'local'}, target {self.target})")
         if st.sentinel("STOP"):
             st.logline("STOP present; exiting without chaining"); self.cancel_successors(); return 0
@@ -429,6 +435,7 @@ class Loop:
                 if self.my_id and int(time.time()) % 3600 < 600:
                     self.ensure_successor()
                 events = self.discover()
+                st.meta["last_poll"] = now_iso()
                 budget = [MAX_LLM_TURNS_PER_TICK]
                 for rec in events:
                     self.handle(rec, budget)
