@@ -50,7 +50,7 @@ def _note(r: dict) -> str:
     if r.get("evidence") and r.get("klass") not in ("OK", "PENDING", "COMPLETED"):
         return r["evidence"]
     reason = r.get("reason") or ""
-    return "" if reason == "None" else reason
+    return "" if reason == "None" or not is_live(r.get("state", "")) else reason
 
 
 def header(state: State, target: str) -> str:

@@ -185,6 +185,12 @@ class Loop:
                 rec["stdout_path"] = slurm.resolve_pattern(pat, jid, r["JobName"], USER, r["NodeList"]) if pat else None
             if r["State"] != prev_state:
                 rec["last_change"] = now_iso()
+                if new and not slurm.is_live(r["State"]) and r["End"] not in ("", "Unknown", "None"):
+                    # adopted after the fact: date it by when Slurm says it ended, not when we noticed
+                    try:
+                        rec["last_change"] = datetime.strptime(r["End"], "%Y-%m-%dT%H:%M:%S").astimezone().isoformat(timespec="seconds")
+                    except ValueError:
+                        pass
                 if slurm.norm_state(r["State"]) == "RUNNING":
                     rec["stall_reported"] = False
             klass, tier, evidence = triage.classify(self.cfg, rec)
