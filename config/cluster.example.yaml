@@ -20,8 +20,8 @@ claude:
   # full model id the `claude` CLI accepts.
   tiers:
     classify: {model: sonnet,         budget_usd: 1}   # cheap triage of crashes the regexes don't recognize (see classify_unknown)
-    tier2:    {model: fable,          budget_usd: 8}   # code changes: trivial-crash diagnose+patch+resubmit
-    tier3:    {model: claude-opus-4-8, budget_usd: 6}  # everything else: diagnose, propose, escalate
+    tier2:    {model: claude-opus-4-8, budget_usd: 6}   # code changes: trivial-crash diagnose+patch+resubmit
+    tier3:    {model: fable,           budget_usd: 8}  # everything else: diagnose, propose, escalate
     chat:     {model: claude-opus-4-8, budget_usd: 4}  # replies to your Slack messages / standing orders
     compact:  {model: sonnet,         budget_usd: 1}   # agent_notes.md compaction
     report:   {model: sonnet,         budget_usd: 1}   # optional prose summary in the daily digest

@@ -28,8 +28,8 @@ slurm:
 claude:
   tiers:                   # model + $ cap for each kind of Claude turn
     classify: {model: sonnet,          budget_usd: 1}   # menial: triage unrecognized crashes
-    tier2:    {model: fable,           budget_usd: 8}   # code changes
-    tier3:    {model: claude-opus-4-8, budget_usd: 6}   # fix-related diagnosis / proposals
+    tier2:    {model: claude-opus-4-8, budget_usd: 6}   # code changes
+    tier3:    {model: fable,           budget_usd: 8}   # fix-related diagnosis / proposals
     chat:     {model: claude-opus-4-8, budget_usd: 4}   # your Slack / standing-order replies
     compact:  {model: sonnet,          budget_usd: 1}   # menial: notes compaction
     report:   {model: sonnet,          budget_usd: 1}   # menial: digest prose
