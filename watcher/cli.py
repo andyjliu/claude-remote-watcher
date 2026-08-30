@@ -52,17 +52,20 @@ def _prepare(target: Path) -> dict:
 
 
 def _trust_workspace(sd: Path) -> None:
-    """Pre-accept Claude Code's workspace-trust dialog for the state dir (remote-control refuses
-    to start otherwise, and there is no terminal in a Slurm job to accept it)."""
+    """Pre-accept Claude Code's workspace-trust dialog for the state dir and the global
+    remote-control consent (remote-control refuses to start without the former and blocks
+    forever on an "Enable Remote Control? (y/n)" readline prompt without the latter; there is
+    no terminal in a Slurm job to answer either)."""
     cj = Path("~/.claude.json").expanduser()
     try:
         data = json.loads(cj.read_text()) if cj.exists() else {}
     except json.JSONDecodeError:
         return
     proj = data.setdefault("projects", {}).setdefault(str(sd), {})
-    if proj.get("hasTrustDialogAccepted"):
+    if proj.get("hasTrustDialogAccepted") and data.get("remoteDialogSeen"):
         return
     proj["hasTrustDialogAccepted"] = True
+    data["remoteDialogSeen"] = True
     tmp = cj.with_suffix(".json.cwtmp")
     tmp.write_text(json.dumps(data, indent=2))
     os.replace(tmp, cj)
