@@ -40,6 +40,7 @@ Then just `sbatch` from that directory as usual. Optional per-script directives:
 #WATCHER expect_pattern=loss=     # ...unless this regex is in the log tail
 #WATCHER resume=none              # never resubmit
 #WATCHER noauto                   # never act; always ask
+#WATCHER ignore                   # track only: no fixes, no Claude turns, no pings (another controller owns it)
 ```
 
 ## What it does

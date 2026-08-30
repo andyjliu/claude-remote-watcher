@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 _RX = re.compile(r"^\s*#\s*WATCHER\s+(.+?)\s*$", re.I)
-BOOL_KEYS = {"noauto"}
+BOOL_KEYS = {"noauto", "ignore"}
 
 
 def parse(script: str | None) -> dict:

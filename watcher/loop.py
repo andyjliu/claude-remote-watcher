@@ -241,10 +241,14 @@ class Loop:
     def handle(self, rec: dict, llm_budget: list[int]) -> None:
         d = directives.effective(self.state.dir, rec)
         rec["directives_effective"] = d
-        if (rec["klass"] == "CRASHED" and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
+        if (rec["klass"] == "CRASHED" and not d.get("ignore") and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
                 and not self.state.sentinel("BLOCKED") and time.time() > self.quota_until and llm_budget[0] > 0):
             self.classify_with_claude(rec)
         klass, tier = rec["klass"], rec["tier"]
+        if d.get("ignore"):  # someone else's responsibility: track it, never act or ping
+            rec["handled"] = True
+            self.state.logline(f"job {rec['id']} {rec.get('name')}: {klass} ignored per directive")
+            return
         max_att = int(d.get("max_attempts", get(self.cfg, "watcher.max_attempts", 3)))
         attempts = self.state.attempts(rec["id"])
         noauto = bool(d.get("noauto")) or d.get("resume", "resubmit") == "none"
