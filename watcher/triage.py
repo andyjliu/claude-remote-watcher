@@ -11,7 +11,7 @@ from .slurm import norm_state
 # klass -> tier. Tier 0/1 are fixed deterministically, 2/3 go to Claude, None = nothing to do.
 TIER = {
     "OK": None, "PENDING": None, "COMPLETED": None, "CANCELLED": None,
-    "PREEMPTED": 0, "NODE_FAIL": 0, "TIMEOUT": 0, "BOOT_FAIL": 0, "REQUEUE_HOLD": 0,
+    "PREEMPTED": 0, "NODE_FAIL": 0, "TIMEOUT": 0, "BOOT_FAIL": 0, "REQUEUE_HOLD": 0, "TRANSIENT": 0,
     "OOM": 1,
     "CRASHED_TRIVIAL": 2,
     "CRASHED": 3, "STALLED": 3, "UNKNOWN": 3,

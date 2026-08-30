@@ -41,6 +41,7 @@ def _prepare(target: Path) -> dict:
     (sd / "watcher.sbatch").write_text(SBATCH_BODY.format(repo=REPO, state=sd, target=cfg["_target"]))
     if not (sd / "watcher.yaml").exists():
         (sd / "watcher.yaml").write_text("# per-directory overrides (see config/watcher.example.yaml)\n{}\n")
+    _trust_workspace(sd)
     # keep .watcher/ out of the experiment repo's git status
     git_excl = Path(cfg["_target"]) / ".git" / "info" / "exclude"
     if git_excl.parent.is_dir():
@@ -48,6 +49,23 @@ def _prepare(target: Path) -> dict:
         if ".watcher/" not in cur:
             git_excl.write_text(cur.rstrip("\n") + "\n.watcher/\n")
     return cfg
+
+
+def _trust_workspace(sd: Path) -> None:
+    """Pre-accept Claude Code's workspace-trust dialog for the state dir (remote-control refuses
+    to start otherwise, and there is no terminal in a Slurm job to accept it)."""
+    cj = Path("~/.claude.json").expanduser()
+    try:
+        data = json.loads(cj.read_text()) if cj.exists() else {}
+    except json.JSONDecodeError:
+        return
+    proj = data.setdefault("projects", {}).setdefault(str(sd), {})
+    if proj.get("hasTrustDialogAccepted"):
+        return
+    proj["hasTrustDialogAccepted"] = True
+    tmp = cj.with_suffix(".json.cwtmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, cj)
 
 
 def cmd_start(a):

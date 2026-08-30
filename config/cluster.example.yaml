@@ -19,11 +19,16 @@ claude:
   # Model + per-turn budget for each kind of Claude turn. Any model alias or
   # full model id the `claude` CLI accepts.
   tiers:
+    classify: {model: haiku, budget_usd: 0.5}  # cheap triage of crashes the regexes don't recognize (see classify_unknown)
     tier2:   {model: sonnet, budget_usd: 3}   # trivial-crash diagnose+patch+resubmit
     tier3:   {model: opus,   budget_usd: 6}   # everything else: diagnose, propose, escalate
     chat:    {model: sonnet, budget_usd: 3}   # replies to your Slack messages / standing orders
     compact: {model: haiku,  budget_usd: 1}   # agent_notes.md compaction
     report:  {model: haiku,  budget_usd: 1}   # optional prose summary in the daily digest
+  # When a FAILED job matches neither the oom nor the trivial regexes, ask the `classify`
+  # model which it is before spending a tier-3 turn: TRIVIAL->tier2, OOM->tier1,
+  # TRANSIENT->tier0 resubmit, REAL/UNSURE->tier3.
+  classify_unknown: true
   turn_timeout_min: 40
   quota_backoff_min: 30
   remote_control:

@@ -57,6 +57,7 @@ class Loop:
         # Only a Slurm job that *is* a watcher job takes part in chaining; a loop run by hand
         # inside some other allocation (an interactive job) must not.
         self.my_id = os.environ.get("SLURM_JOB_ID", "") if os.environ.get("SLURM_JOB_NAME") == job_name(cfg) else ""
+        os.environ["CW_JOB_ID"] = self.my_id or "local"
         self.start = time.time()
         self.rc_proc: subprocess.Popen | None = None
         self.tz = ZoneInfo(get(cfg, "watcher.timezone", "UTC"))
@@ -218,8 +219,30 @@ class Loop:
             if base is not None and not base.get("thread_ts"):
                 base["thread_ts"] = new_ts
 
+    def classify_with_claude(self, rec: dict) -> None:
+        """Cheap Claude triage for a CRASHED job the regexes did not recognize; rewrites klass/tier."""
+        prompt = render("turn_classify.md", JOB_ID=rec["id"], JOB_NAME=rec.get("name", ""), JOB_STATE=rec.get("state", ""),
+                        EXIT=rec.get("exit_code", ""), ELAPSED=rec.get("elapsed", ""), TIMELIMIT=rec.get("timelimit", ""),
+                        MEM=rec.get("req_mem", ""), SCRIPT=rec.get("script") or "?", STDOUT=rec.get("stdout_path") or "?",
+                        LOG_TAIL=logs.tail(rec.get("stdout_path"), int(get(self.cfg, "watcher.log_tail_lines", 150))))
+        res = run_turn(self.cfg, self.state, "classify", prompt, tag=rec["id"])
+        rec["classified"] = True
+        if res["quota"]:
+            self.after_turn(res, None); return
+        m = re.search(r"^CLASS:\s*(\w+)", res["result"], re.M)
+        cls = m.group(1).upper() if m else "UNSURE"
+        remap = {"TRIVIAL": ("CRASHED_TRIVIAL", 2), "OOM": ("OOM", 1), "TRANSIENT": ("TRANSIENT", 0)}
+        if cls in remap:
+            rec["klass"], rec["tier"] = remap[cls]
+        rec["evidence"] = f"claude classify: {cls}. " + rec.get("evidence", "")
+        self.state.logline(f"job {rec['id']}: classify -> {cls} => {rec['klass']} (tier {rec['tier']})")
+        self.state.note(f"job {rec['id']} ({rec.get('name')}): Claude classified the crash as {cls}")
+
     def handle(self, rec: dict, llm_budget: list[int]) -> None:
         d = rec.get("directives", {})
+        if (rec["klass"] == "CRASHED" and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
+                and not self.state.sentinel("BLOCKED") and time.time() > self.quota_until and llm_budget[0] > 0):
+            self.classify_with_claude(rec)
         klass, tier = rec["klass"], rec["tier"]
         max_att = int(d.get("max_attempts", get(self.cfg, "watcher.max_attempts", 3)))
         attempts = self.state.attempts(rec["id"])

@@ -48,7 +48,7 @@ class State:
         atomic_write(self.meta_file, json.dumps(self.meta, indent=1, sort_keys=True))
 
     def logline(self, msg: str) -> None:
-        line = f"{now_iso()} [{os.environ.get('SLURM_JOB_ID', 'local')}] {msg}"
+        line = f"{now_iso()} [{os.environ.get('CW_JOB_ID', 'local')}] {msg}"
         print(line, flush=True)
         with open(self.log, "a") as f:
             f.write(line + "\n")

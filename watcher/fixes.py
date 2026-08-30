@@ -52,15 +52,20 @@ def oom_fix(cfg: dict, state: State, rec: dict) -> tuple[str, str]:
         new_id = resubmit(state, rec, reason=f"OOM: {desc}")
         return new_id, desc
     factor = float(d.get("mem_bump", get(cfg, "watcher.mem_bump", 1.5)))
-    cap = float(get(cfg, "watcher.max_mem_gb", 480))
-    cur = slurm.parse_mem_gb(rec.get("req_mem", "")) or 0
-    if cur <= 0:
-        raise FixError("cannot determine current --mem")
-    new = min(cap, cur * factor)
-    if new <= cur + 0.5:
-        raise FixError(f"--mem already at cap ({cur:.0f}G)")
-    new_id = resubmit(state, rec, extra_args=[f"--mem={int(round(new))}G"], reason="OOM: mem bump")
-    return new_id, f"--mem {cur:.0f}G -> {int(round(new))}G"
+    cap_mb = float(get(cfg, "watcher.max_mem_gb", 480)) * 1024
+    cur_gb = slurm.parse_mem_gb(rec.get("req_mem", ""))
+    if not cur_gb or cur_gb <= 0:
+        raise FixError(f"cannot determine current --mem from ReqMem={rec.get('req_mem')!r}")
+    cur_mb = cur_gb * 1024
+    new_mb = min(cap_mb, cur_mb * factor)
+    if new_mb <= cur_mb * 1.05:
+        raise FixError(f"--mem already at cap ({_fmt_mem(cur_mb)})")
+    new_id = resubmit(state, rec, extra_args=[f"--mem={_fmt_mem(new_mb)}"], reason="OOM: mem bump")
+    return new_id, f"--mem {_fmt_mem(cur_mb)} -> {_fmt_mem(new_mb)}"
+
+
+def _fmt_mem(mb: float) -> str:
+    return f"{int(round(mb / 1024))}G" if mb >= 2048 else f"{int(round(mb))}M"
 
 
 def _halve_batch(state: State, rec: dict, batch_arg: str) -> str:
