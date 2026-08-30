@@ -33,6 +33,7 @@ Then just `sbatch` from that directory as usual. Optional per-script directives:
 
 ```
 #WATCHER max_attempts=3           # tier-0/1 resubmits per job lineage
+#WATCHER mem=64G                  # OOM: resubmit with exactly this --mem
 #WATCHER mem_bump=1.5             # OOM: multiply --mem (capped by watcher.max_mem_gb)
 #WATCHER batch_arg=--batch_size   # OOM alternative: halve this value in the script instead
 #WATCHER stall_min=45             # RUNNING with no stdout growth for N min -> escalate
@@ -90,6 +91,6 @@ and does nothing. `STOP` (via `watch stop` or Slack `stop`) ends the chain;
 
 `jobs.json` controller records · `agent_notes.md` agent memory ·
 `standing_orders.md` your instructions · `patches/` every diff applied ·
-`turns/` raw Claude outputs · `controller.log` · `remote_control.log` ·
+`overrides.yaml` job-name-glob → directives (agent- or user-written; steers the deterministic fixer) · `turns/` raw Claude outputs · `controller.log` · `remote_control.log` ·
 `slurm/` watcher job logs · `settings.json` rendered deny-list ·
 `watcher.yaml` per-dir overrides.

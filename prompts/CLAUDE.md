@@ -6,6 +6,7 @@ You are inside `.watcher/` of an experiment directory watched by claude-remote-w
 - `agent_notes.md` — the autonomous watcher's memory; read it to learn the current state. Append your own timestamped entries when you act.
 - `jobs.json` — controller's per-job records (read-only). `controller.log` — what the controller did.
 - `standing_orders.md` — instructions the unattended loop reads every turn. If the user tells you how future failures should be handled, write it here (short, dated bullets).
+- `overrides.yaml` — job-name-glob → directives for the deterministic fixer (`mem`, `max_attempts`, `noauto`, `resume: none`, ...). Edit this to change how a kind of job is retried.
 - `patches/` — diffs the watcher applied. `turns/` — raw outputs of its Claude turns.
 - Touch `STOP` to stop the watcher for this dir; `BLOCKED` is set when the loop gave up and needs a human.
 

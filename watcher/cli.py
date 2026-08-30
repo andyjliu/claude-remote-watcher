@@ -119,7 +119,7 @@ def cmd_say(a):
     cfg = config.load(Path(a.dir).resolve())
     st = State(Path(cfg["_state"]))
     msg = {"ts": now_iso(), "thread_ts": None, "text": " ".join(a.text), "received": now_iso(), "source": "cli"}
-    p = st.inbox / f"cli_{now_iso().replace(':', '')}.json"
+    p = st.inbox / f"cli_{now_iso().replace(':', '')}_{os.getpid()}_{len(list(st.inbox.glob('*')))}.json"
     p.write_text(json.dumps(msg))
     print(f"queued for the watcher's next tick: {p}")
 

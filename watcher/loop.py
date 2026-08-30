@@ -239,7 +239,8 @@ class Loop:
         self.state.note(f"job {rec['id']} ({rec.get('name')}): Claude classified the crash as {cls}")
 
     def handle(self, rec: dict, llm_budget: list[int]) -> None:
-        d = rec.get("directives", {})
+        d = directives.effective(self.state.dir, rec)
+        rec["directives_effective"] = d
         if (rec["klass"] == "CRASHED" and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
                 and not self.state.sentinel("BLOCKED") and time.time() > self.quota_until and llm_budget[0] > 0):
             self.classify_with_claude(rec)
@@ -377,7 +378,7 @@ class Loop:
             self.slack.post("BLOCKED cleared", thread_ts=thread); return True
         m = re.match(r"^(pause|resume)\s+(\S+)$", t)
         if m and m.group(2) in self.state.jobs:
-            self.state.jobs[m.group(2)].setdefault("directives", {})["noauto"] = (m.group(1) == "pause")
+            self.state.jobs[m.group(2)].setdefault("directive_overrides", {})["noauto"] = (m.group(1) == "pause")
             self.slack.post(f"{m.group(1)}d auto-fixes for {m.group(2)}", thread_ts=thread); return True
         return False
 

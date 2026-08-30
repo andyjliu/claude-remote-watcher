@@ -27,3 +27,27 @@ def parse(script: str | None) -> dict:
             elif tok.lower() in BOOL_KEYS:
                 out[tok.lower()] = True
     return out
+
+
+def overrides(state_dir: Path, job_name: str) -> dict:
+    """Directives from <state>/overrides.yaml, keyed by job-name glob. Written by the agent or the user."""
+    import fnmatch
+    import yaml
+    p = Path(state_dir) / "overrides.yaml"
+    try:
+        data = yaml.safe_load(p.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    out: dict = {}
+    for pattern, d in data.items():
+        if isinstance(d, dict) and fnmatch.fnmatch(job_name, str(pattern)):
+            out.update({str(k).lower(): v for k, v in d.items()})
+    return out
+
+
+def effective(state_dir: Path, rec: dict) -> dict:
+    """Script directives overridden by overrides.yaml, overridden by per-job pause/resume."""
+    d = dict(rec.get("directives") or {})
+    d.update(overrides(state_dir, rec.get("name") or ""))
+    d.update(rec.get("directive_overrides") or {})
+    return d

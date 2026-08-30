@@ -45,7 +45,13 @@ def resubmit(state: State, rec: dict, extra_args: list[str] | None = None, reaso
 
 def oom_fix(cfg: dict, state: State, rec: dict) -> tuple[str, str]:
     """Returns (new_job_id, description)."""
-    d = rec.get("directives", {})
+    d = rec.get("directives_effective") or rec.get("directives", {})
+    if d.get("mem"):  # explicit target from overrides.yaml / #WATCHER mem=
+        cur = slurm.parse_mem_gb(rec.get("req_mem", "")) or 0
+        want = slurm.parse_mem_gb(str(d["mem"])) or 0
+        if want > cur * 1.05:
+            new_id = resubmit(state, rec, extra_args=[f"--mem={d['mem']}"], reason="OOM: mem from directive")
+            return new_id, f"--mem {rec.get('req_mem')} -> {d['mem']} (directive)"
     batch_arg = d.get("batch_arg")
     if batch_arg and rec.get("script"):
         desc = _halve_batch(state, rec, batch_arg)
