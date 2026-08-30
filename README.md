@@ -64,6 +64,12 @@ auto-compacted past `notes_max_kb`.
   `status`, `report`, `stop`, `resume`, `pause <job>` are answered without a
   Claude turn; anything else becomes a Claude chat turn and a standing order.
   Two-way needs a Socket Mode token — see Slack setup.
+  Every message is prefixed with the cluster it came from (`[orchard] ...`,
+  from `slurm.cluster`). When several clusters share the bot, address one with
+  `orchard status`, `orchard: report`, or `@orchard leave t_oom alone`
+  (`@all ...` / `all: ...` for everyone); an unaddressed message is handled by
+  every cluster, and a reply inside a job thread only by the cluster that owns
+  the thread.
 - **claude.ai/code**: the watcher runs `claude remote-control --name cw:<dir>@<cluster>`;
   pick that session on claude.ai/code or the mobile app. It starts in
   `.watcher/`, reads the notes, and can leave standing orders for the loop.

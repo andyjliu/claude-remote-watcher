@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.request
 from pathlib import Path
 
+from .config import cluster_name, get
 from .config import path as cfg_path
 from .state import State, now_iso
 
@@ -26,6 +28,58 @@ class Slack:
         self.enabled = bool(self.token and self.user_id)
         self.channel: str | None = state.meta.get("slack_channel")
         self._listener: threading.Thread | None = None
+        # Several clusters (and directories) may share this bot and this DM channel, so every
+        # outbound message is prefixed "[<cluster>]" and inbound DMs can be addressed to one cluster.
+        self.tag = cluster_name(cfg)
+        self.peers: set[str] = {str(x).lower() for x in (get(cfg, "slack.peer_clusters") or [])}
+        self.peers |= {str(x).lower() for x in state.meta.get("peer_clusters", [])}
+        self.peers.discard(self.tag.lower())
+
+    # ---- multi-cluster routing --------------------------------------------
+    _ADDR = re.compile(r"^(@)?([A-Za-z][\w.-]*)(\s*[:,]\s*|\s+|$)(.*)$", re.S)
+
+    def address(self, text: str) -> tuple[str | None, str]:
+        """Parse a leading '@name', 'name:' or 'name <cmd>' where name is this cluster, a known peer,
+        or 'all'/'everyone' (those two need the '@' or ':' form so 'all done' stays plain text).
+        Returns (name.lower() or None, remaining text)."""
+        m = self._ADDR.match(text.strip())
+        if not m:
+            return None, text
+        at, name, sep, rest = m.groups()
+        name_l = name.lower()
+        if name_l in ("all", "everyone"):
+            return (name_l, rest.strip()) if (at or ":" in sep or "," in sep) else (None, text)
+        if name_l == self.tag.lower() or name_l in self.peers:
+            return name_l, rest.strip()
+        return None, text
+
+    def for_us(self, name: str | None) -> bool:
+        return name is None or name in ("all", "everyone") or name == self.tag.lower()
+
+    def _remember(self, key: str, ts: str | None, cap: int = 400) -> None:
+        if not ts:
+            return
+        lst = self.state.meta.setdefault(key, [])
+        if ts not in lst:
+            lst.append(ts)
+            del lst[:-cap]
+
+    def remember_user_ts(self, ts: str | None) -> None:
+        """Every user DM reaches every cluster; remember its ts so a thread the user starts on their
+        own message is not mistaken for another cluster's job thread."""
+        self._remember("seen_user_ts", ts)
+
+    def is_our_thread(self, thread_ts: str, jobs: dict) -> bool:
+        if any(r.get("thread_ts") == thread_ts for r in jobs.values()):
+            return True
+        return thread_ts in self.state.meta.get("posted_ts", []) or thread_ts in self.state.meta.get("seen_user_ts", [])
+
+    def _learn_peer(self, text: str) -> None:
+        m = re.match(r"^\[([A-Za-z][\w.-]*)\]\s", text or "")
+        if m and m.group(1).lower() != self.tag.lower() and m.group(1).lower() not in self.peers:
+            self.peers.add(m.group(1).lower())
+            self.state.meta["peer_clusters"] = sorted(self.peers)
+            self.state.logline(f"slack: learned peer cluster {m.group(1)!r} from its posts")
 
     # ---- outbound -------------------------------------------------------
     def _api(self, method: str, payload: dict) -> dict:
@@ -49,14 +103,17 @@ class Slack:
         if not self.enabled:
             self.state.logline(f"[slack disabled] {text[:200]}")
             return None
-        payload = {"channel": self._ensure_channel(), "text": text[:3800], "unfurl_links": False}
+        payload = {"channel": self._ensure_channel(), "text": f"[{self.tag}] {text}"[:3800], "unfurl_links": False}
         if thread_ts:
             payload["thread_ts"] = thread_ts
         try:
-            return self._api("chat.postMessage", payload).get("ts")
+            ts = self._api("chat.postMessage", payload).get("ts")
         except Exception as e:  # noqa: BLE001
             self.state.logline(f"slack post failed: {e}")
             return None
+        if not thread_ts:
+            self._remember("posted_ts", ts)  # roots of threads that belong to this watcher
+        return ts
 
     # ---- inbound --------------------------------------------------------
     def start_listener(self) -> bool:
@@ -78,6 +135,8 @@ class Slack:
             if req.type == "events_api":
                 c.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
                 ev = req.payload.get("event", {})
+                if ev.get("type") == "message" and ev.get("channel_type") == "im" and ev.get("bot_id") and not ev.get("thread_ts"):
+                    self._learn_peer(ev.get("text", ""))  # another cluster's "[name] ..." post
                 if (ev.get("type") == "message" and ev.get("channel_type") == "im"
                         and ev.get("user") == self.user_id and not ev.get("bot_id") and not ev.get("subtype")):
                     msg = {"ts": ev.get("ts"), "thread_ts": ev.get("thread_ts"), "text": ev.get("text", ""),

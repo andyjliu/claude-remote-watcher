@@ -62,7 +62,8 @@ def header(state: State, target: str) -> str:
     failed = sum(1 for r in recent if norm_state(r.get("state")) in ("FAILED", "OUT_OF_MEMORY", "TIMEOUT", "NODE_FAIL", "PREEMPTED"))
     waiting = [r["id"] for r in state.jobs.values() if r.get("escalated") and not r.get("resolved")]
     up = _ago(m.get("watcher_started")) if m.get("watcher_started") else "?"
-    l1 = (f"{target.rstrip('/').rsplit('/', 1)[-1]} — watcher {m.get('watcher_job', '?')} up {up}, "
+    where = target.rstrip('/').rsplit('/', 1)[-1] + (f"@{m['cluster']}" if m.get("cluster") else "")
+    l1 = (f"{where} — watcher {m.get('watcher_job', '?')} up {up}, "
           f"slack chat {'on' if m.get('slack_inbound') else 'off'}, last poll {_ago(m.get('last_poll')) or '?'} ago")
     l2 = (f"running {sum(1 for r in live if norm_state(r['state']) == 'RUNNING')} · pending "
           f"{sum(1 for r in live if norm_state(r['state']) != 'RUNNING')} · done(24h) {done} · failed(24h) {failed}"

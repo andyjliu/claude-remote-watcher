@@ -4,6 +4,9 @@
 # (same keys, deep-merged).
 
 slurm:
+  cluster: null              # name of this cluster, e.g. "babel"; prefixes every Slack message as "[babel]", names the
+                             # remote-control session cw:<dir>@babel, and lets you address DMs ("babel: status", "@babel ...").
+                             # Default: $SLURM_CLUSTER_NAME, else the hostname prefix.
   partition: fnsw            # CHANGE: a cheap partition that tolerates long-lived CPU jobs
   qos: fnsw_qos              # CHANGE (or null)
   gres: "gpu:0"              # CHANGE: null to omit; some clusters reject 0-GPU jobs -> "gpu:1"
@@ -41,6 +44,8 @@ slack:
   user_id_file:   ~/.config/claude-watcher/slack_user_id     # U...      sole recipient
   app_token_file: ~/.config/claude-watcher/slack_app_token   # xapp-...  Socket Mode; enables inbound
   thread_per_job: true
+  peer_clusters: []          # other clusters sharing this bot, e.g. [orchard]; DMs addressed to them are ignored here.
+                             # Also learned automatically from their "[name] ..." posts, so this is only a warm start.
 
 watcher:
   poll_interval_sec: 300

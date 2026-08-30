@@ -3,7 +3,7 @@
 {{COMMON}}
 
 ## Message
-Received {{RECEIVED}} via {{SOURCE}}{{SCOPE}}:
+Received {{RECEIVED}} via {{SOURCE}} on cluster `{{CLUSTER}}`{{SCOPE}}:
 
 > {{TEXT}}
 

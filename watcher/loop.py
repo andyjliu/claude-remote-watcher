@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from . import directives, fixes, logs, slurm, triage
 from .claude_turn import REPO, render, run_turn
 from .compact import maybe_compact
-from .config import get, path as cfg_path
+from .config import cluster_name, get, path as cfg_path
 from .report import digest, status, table
 from .slack import Slack
 from .state import State, now_iso
@@ -115,7 +115,7 @@ class Loop:
         if not self.rc_wanted():
             return
         log = open(self.state.dir / "remote_control.log", "a")
-        name = f"{job_name(self.cfg)}@{os.environ.get('SLURM_CLUSTER_NAME') or os.uname().nodename.split('-')[0]}"
+        name = f"{job_name(self.cfg)}@{cluster_name(self.cfg)}"
         cmd = [get(self.cfg, "claude.bin", "claude"), "remote-control", "--name", name,
                "--permission-mode", get(self.cfg, "claude.remote_control.permission_mode", "acceptEdits")]
         env = dict(os.environ)
@@ -343,11 +343,19 @@ class Loop:
                 p.unlink(); continue
             text = (msg.get("text") or "").strip()
             thread = msg.get("thread_ts")
+            done = p.with_suffix(".done")
+            p.rename(done)
+            if msg.get("source") == "slack":
+                # Every DM reaches every cluster (and directory) sharing this bot: keep only what is ours.
+                self.slack.remember_user_ts(msg.get("ts"))
+                addr, text = self.slack.address(text)
+                if not self.slack.for_us(addr):
+                    self.state.logline(f"inbox: addressed to {addr!r}, not us; ignoring: {text[:80]}"); continue
+                if thread and not self.slack.is_our_thread(thread, self.state.jobs):
+                    self.state.logline(f"inbox: reply in a thread that is not ours ({thread}); ignoring: {text[:80]}"); continue
             scope_rec = None
             if thread:
                 scope_rec = next((r for r in self.state.jobs.values() if r.get("thread_ts") == thread), None)
-            done = p.with_suffix(".done")
-            p.rename(done)
             if self.shortcut(text, thread, scope_rec):
                 continue
             with open(self.state.orders, "a") as f:
@@ -360,7 +368,7 @@ class Loop:
             llm_budget[0] -= 1
             scope = f" (in the Slack thread of job {scope_rec['id']}, {scope_rec.get('name')})" if scope_rec else ""
             prompt = render("turn_chat.md", TARGET=str(self.target), STATE=str(self.state.dir), RECEIVED=msg.get("received", ""),
-                            SOURCE=msg.get("source", "?"), SCOPE=scope, TEXT=text, SUMMARY=table(self.state))
+                            SOURCE=msg.get("source", "?"), CLUSTER=cluster_name(self.cfg), SCOPE=scope, TEXT=text, SUMMARY=table(self.state))
             res = run_turn(self.cfg, self.state, "chat", prompt, tag="chat")
             if res["quota"] or not res["ok"]:
                 self.after_turn(res, None)
@@ -419,6 +427,7 @@ class Loop:
         if "last_report_date" not in st.meta:  # no digest on the day the watcher starts
             st.meta["last_report_date"] = datetime.now(self.tz).strftime("%Y-%m-%d")
         st.meta["watcher_job"] = self.my_id or "local"
+        st.meta["cluster"] = cluster_name(self.cfg)
         st.meta["watcher_started"] = now_iso()
         st.logline(f"watcher loop up (job {self.my_id or 'local'}, target {self.target})")
         if st.sentinel("STOP"):

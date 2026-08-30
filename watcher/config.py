@@ -53,6 +53,14 @@ def get(cfg: dict, dotted: str, default: Any = None) -> Any:
     return cur
 
 
+def cluster_name(cfg: dict) -> str:
+    """Human name of this cluster: slurm.cluster, else $SLURM_CLUSTER_NAME, else the hostname prefix.
+    Shown as a "[name]" prefix on every Slack message, in the remote-control session name, and
+    used to route DMs when several clusters share one Slack bot."""
+    name = get(cfg, "slurm.cluster") or os.environ.get("SLURM_CLUSTER_NAME") or os.uname().nodename.split("-")[0]
+    return str(name).strip()
+
+
 def path(cfg: dict, dotted: str) -> Path | None:
     v = get(cfg, dotted)
     return Path(v).expanduser() if v else None
