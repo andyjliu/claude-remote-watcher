@@ -27,12 +27,12 @@ slurm:
   time: "1-00:00:00"       # watcher chains a successor; this is just the slice length
 claude:
   tiers:                   # model + $ cap for each kind of Claude turn
-    classify: {model: haiku,  budget_usd: 0.5}
-    tier2:    {model: sonnet, budget_usd: 3}
-    tier3:    {model: opus,   budget_usd: 6}
-    chat:     {model: sonnet, budget_usd: 3}
-    compact:  {model: haiku,  budget_usd: 1}
-    report:   {model: haiku,  budget_usd: 1}
+    classify: {model: sonnet,          budget_usd: 1}   # menial: triage unrecognized crashes
+    tier2:    {model: fable,           budget_usd: 8}   # code changes
+    tier3:    {model: claude-opus-4-8, budget_usd: 6}   # fix-related diagnosis / proposals
+    chat:     {model: claude-opus-4-8, budget_usd: 4}   # your Slack / standing-order replies
+    compact:  {model: sonnet,          budget_usd: 1}   # menial: notes compaction
+    report:   {model: sonnet,          budget_usd: 1}   # menial: digest prose
   classify_unknown: true   # ask `classify` before spending a tier-3 turn on unrecognized crashes
 watcher:
   report_hour: 9
