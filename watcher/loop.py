@@ -250,6 +250,7 @@ class Loop:
         d = directives.effective(self.state.dir, rec)
         rec["directives_effective"] = d
         if (rec["klass"] == "CRASHED" and not d.get("ignore") and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
+                and self.esc.quarantined(rec.get("name")) is None  # quarantined names get no turns at all, not even triage
                 and not self.state.sentinel("BLOCKED") and time.time() > self.quota_until and llm_budget[0] > 0):
             self.classify_with_claude(rec)
         klass, tier = rec["klass"], rec["tier"]
