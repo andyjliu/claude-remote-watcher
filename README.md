@@ -78,6 +78,12 @@ auto-compacted past `notes_max_kb`.
   (`@all ...` / `all: ...` for everyone); an unaddressed message goes to the
   cluster that spoke last, and a reply inside a job thread only to the cluster
   that owns the thread.
+- **Daily digest** (`watcher.report_hour`, also `report` on Slack): a 2-4 sentence
+  Sonnet paragraph on what needs you first, then one line per job name under
+  NEEDS YOU (with a link to its thread, `(new)` if it appeared since yesterday),
+  FIXED AUTOMATICALLY, FINISHED, RUNNING, PENDING. Escalations close on their own
+  once the job completes, you cancel it, or a retry of it completes. `status`
+  gives the full per-job table.
 - **claude.ai/code**: the watcher runs `claude remote-control --name cw:<dir>@<cluster>`;
   pick that session on claude.ai/code or the mobile app. It starts in
   `.watcher/`, reads the notes, and can leave standing orders for the loop.

@@ -7,6 +7,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -105,6 +106,33 @@ class Slack:
             raise RuntimeError(f"slack {method}: {out.get('error')}")
         return out
 
+    def _api_get(self, method: str, params: dict) -> dict:
+        req = urllib.request.Request(f"https://slack.com/api/{method}?{urllib.parse.urlencode(params)}",
+                                     headers={"Authorization": f"Bearer {self.token}"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            out = json.loads(r.read().decode())
+        if not out.get("ok"):
+            raise RuntimeError(f"slack {method}: {out.get('error')}")
+        return out
+
+    def permalink(self, ts: str | None) -> str | None:
+        """URL of a message in the DM channel (cached in meta); None when disabled or on any error."""
+        if not (self.enabled and ts and self.channel):
+            return None
+        cache = self.state.meta.setdefault("permalinks", {})
+        if ts in cache:
+            return cache[ts]
+        try:
+            url = self._api_get("chat.getPermalink", {"channel": self.channel, "message_ts": ts}).get("permalink")
+        except Exception as e:  # noqa: BLE001
+            self.state.logline(f"slack permalink failed: {e}")
+            return None
+        if url:
+            cache[ts] = url
+            for k in list(cache)[:-300]:
+                del cache[k]
+        return url
+
     def _ensure_channel(self) -> str:
         if not self.channel:
             self.channel = self._api("conversations.open", {"users": self.user_id})["channel"]["id"]
@@ -128,6 +156,22 @@ class Slack:
             self._remember("posted_ts", ts)  # roots of threads that belong to this watcher
         self._touch_thread(thread_ts or ts)
         return ts
+
+    def post_long(self, text: str, limit: int = 3500) -> str | None:
+        """Post text that may exceed one message: split on blank lines; continuation goes in the thread
+        of the first part so the channel stays scannable. Returns the ts of the first part."""
+        parts, cur = [], ""
+        for para in text.split("\n\n"):
+            if cur and len(cur) + 2 + len(para) > limit:
+                parts.append(cur); cur = para
+            else:
+                cur = f"{cur}\n\n{para}" if cur else para
+        if cur:
+            parts.append(cur)
+        root = self.post(parts[0])
+        for part in parts[1:]:
+            self.post(part, thread_ts=root)
+        return root
 
     # ---- inbound (polled) ---------------------------------------------------
     def _threads(self) -> dict:

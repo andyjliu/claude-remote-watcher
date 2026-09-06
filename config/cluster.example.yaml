@@ -27,7 +27,7 @@ claude:
     tier3:    {model: fable,           budget_usd: 8}  # everything else: diagnose, propose, escalate
     chat:     {model: claude-opus-4-8, budget_usd: 4}  # replies to your Slack messages / standing orders
     compact:  {model: sonnet,         budget_usd: 1}   # agent_notes.md compaction
-    report:   {model: sonnet,         budget_usd: 1}   # optional prose summary in the daily digest
+    report:   {model: sonnet,         budget_usd: 1}   # prose paragraph at the top of the daily digest (watcher.report_llm_summary)
   # When a FAILED job matches neither the oom nor the trivial regexes, ask the `classify`
   # model which it is before spending a tier-3 turn: TRIVIAL->tier2, OOM->tier1,
   # TRANSIENT->tier0 resubmit, REAL/UNSURE->tier3.
@@ -56,7 +56,7 @@ watcher:
   lookback_days: 2                 # adopt jobs submitted this long before `watch start`
   report_hour: 9                   # daily digest, local time
   timezone: America/New_York
-  report_llm_summary: false        # add a short Claude-written paragraph to the digest
+  report_llm_summary: true         # 2-4 sentence paragraph at the top of the digest (claude.tiers.report, sonnet, ~1 turn/day)
   notes_max_kb: 24                 # compact agent_notes.md beyond this
   stall_min: 60                    # RUNNING with no stdout growth for this long -> STALLED
   max_attempts: 3                  # tier-0/1 resubmits per job lineage

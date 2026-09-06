@@ -16,7 +16,7 @@ from . import directives, escalation, fixes, logs, slurm, triage
 from .claude_turn import REPO, render, run_turn
 from .compact import maybe_compact
 from .config import cluster_name, get, path as cfg_path
-from .report import digest, status, table
+from .report import digest, open_needs, status, table
 from .slack import Slack
 from .state import State, now_iso
 
@@ -463,7 +463,7 @@ class Loop:
         """Commands answered without a Claude turn."""
         t = text.lower().strip()
         if t in ("status", "report"):
-            body = digest(self.state, str(self.target)) if t == "report" else status(self.state, str(self.target))
+            body = digest(self.state, str(self.target), link=self.slack.permalink) if t == "report" else status(self.state, str(self.target))
             self.slack.post(body, thread_ts=thread); return True
         m = re.match(r"^status\s+(\d+)h$", t)
         if m:
@@ -495,6 +495,40 @@ class Loop:
         return False
 
     # ------------------------------------------------------------------- digest
+    def reconcile_escalations(self) -> int:
+        """Close NEEDS-YOU items the world has already answered: the job completed after all, you cancelled
+        it, or a resubmission of it completed. Keeps the digest's NEEDS YOU list to things still open."""
+        n = 0
+        children: dict[str, list[dict]] = {}
+        for r in self.state.jobs.values():
+            if r.get("parent"):
+                children.setdefault(r["parent"], []).append(r)
+        for rec in list(self.state.jobs.values()):
+            if not (rec.get("escalated") and not rec.get("resolved")):
+                continue
+            st = slurm.norm_state(rec.get("state", ""))
+            why = None
+            if st == "COMPLETED":
+                why = "it completed"
+            elif st == "CANCELLED":
+                why = "it was cancelled"
+            else:
+                seen, stack = set(), list(children.get(rec["id"], []))
+                while stack:
+                    c = stack.pop()
+                    if c["id"] in seen:
+                        continue
+                    seen.add(c["id"])
+                    if slurm.norm_state(c.get("state", "")) == "COMPLETED":
+                        why = f"its retry {c['id']} completed"; break
+                    stack.extend(children.get(c["id"], []))
+            if why:
+                rec["resolved"], rec["resolved_by"] = True, why
+                self.esc.resolve_name(rec.get("name"))
+                self.state.logline(f"job {rec['id']} {rec.get('name')}: escalation closed, {why}")
+                n += 1
+        return n
+
     def maybe_digest(self) -> None:
         now = datetime.now(self.tz)
         hour = int(get(self.cfg, "watcher.report_hour", 9))
@@ -502,12 +536,18 @@ class Loop:
         if now.hour < hour or self.state.meta.get("last_report_date") == today:
             return
         self.state.meta["last_report_date"] = today
-        body = digest(self.state, str(self.target))
-        if get(self.cfg, "watcher.report_llm_summary", False) and time.time() > self.quota_until:
-            res = run_turn(self.cfg, self.state, "report", render("turn_report.md", TARGET=str(self.target), STATE=str(self.state.dir), TABLE=table(self.state, 24)))
-            if res["ok"] and res["slack"]:
-                body += "\n" + res["slack"]
-        self.slack.post(body)
+        self.reconcile_escalations()
+        body = digest(self.state, str(self.target), link=self.slack.permalink)
+        if get(self.cfg, "watcher.report_llm_summary", True) and time.time() > self.quota_until and not self.state.sentinel("BLOCKED"):
+            res = run_turn(self.cfg, self.state, "report", render("turn_report.md", TARGET=str(self.target), STATE=str(self.state.dir),
+                                                                  SUMMARY=body, TABLE=table(self.state, 24)))
+            if res["quota"]:
+                self.after_turn(res, None)
+            elif res["ok"] and res["slack"]:
+                head, rest = body.split("\n\n", 1)  # paragraph sits right under the header, before the lists
+                body = f"{head}\n\n{res['slack'].strip()}\n\n{rest}"
+        self.state.meta["digest_prev_needs"] = sorted(open_needs(self.state))
+        self.slack.post_long(body)
         self.state.logline("posted daily digest")
 
     # ---------------------------------------------------------------------- run
@@ -548,6 +588,7 @@ class Loop:
                 budget = [MAX_LLM_TURNS_PER_TICK]
                 for rec in events:
                     self.handle(rec, budget)
+                self.reconcile_escalations()
                 if st.sentinel("BLOCKED") and not self.blocked_notified:
                     self.slack.post(f"watcher BLOCKED for {self.target}: {(st.dir / 'BLOCKED').read_text().strip()}. Reply here to unblock.")
                     self.blocked_notified = True
