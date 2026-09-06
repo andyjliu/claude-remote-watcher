@@ -57,6 +57,16 @@ watcher:
   notes_max_kb: 24                 # compact agent_notes.md beyond this
   stall_min: 60                    # RUNNING with no stdout growth for this long -> STALLED
   max_attempts: 3                  # tier-0/1 resubmits per job lineage
+  max_llm_turns_per_hour: 12       # rolling cap on Claude turns (3 per poll on top); user replies are exempt
+  # Identical failures (same job name + fingerprint of the last error line) are one problem: after the
+  # first ESCALATE, repeats post a threaded "+1" at most every escalation_delta_min instead of a new turn,
+  # until you reply in the thread. Past quarantine_after failures on >= quarantine_min_nodes nodes the job
+  # name is quarantined: no resubmits, no turns, until `unquarantine <name>` (0 disables).
+  escalation_delta_min: 30
+  quarantine_after: 3
+  quarantine_min_nodes: 2
+  controller_name_glob: "*_ctl"    # array tasks submitted while such a job ran in the same dir are re-driven by it:
+                                   # default resume=none, preemptions left alone (null disables)
   mem_bump: 1.5                    # OOM: multiply --mem by this
   max_mem_gb: 480
   log_tail_lines: 150

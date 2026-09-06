@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import directives, fixes, logs, slurm, triage
+from . import directives, escalation, fixes, logs, slurm, triage
 from .claude_turn import REPO, render, run_turn
 from .compact import maybe_compact
 from .config import cluster_name, get, path as cfg_path
@@ -21,7 +21,7 @@ from .slack import Slack
 from .state import State, now_iso
 
 USER = os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
-MAX_LLM_TURNS_PER_TICK = 3
+MAX_LLM_TURNS_PER_TICK = 3  # per tick; watcher.max_llm_turns_per_hour caps the rolling hour on top
 
 
 def job_name(cfg: dict) -> str:
@@ -63,6 +63,8 @@ class Loop:
         self.tz = ZoneInfo(get(cfg, "watcher.timezone", "UTC"))
         self.blocked_notified = False
         self.quota_until = 0.0
+        self.turn_times: list[float] = []  # rolling-hour LLM budget
+        self.esc = escalation.Escalations(self.state)
         self.stop = False
         signal.signal(signal.SIGTERM, self._on_term)
 
@@ -255,9 +257,45 @@ class Loop:
             rec["handled"] = True
             self.state.logline(f"job {rec['id']} {rec.get('name')}: {klass} ignored per directive")
             return
+        ctl = self.controller_of(rec)
+        if ctl and "resume" not in d:
+            d["resume"], d["controller"] = "none", ctl  # the *_ctl job re-drives its own array tasks
+            if tier == 0:
+                rec["handled"] = True
+                self.state.logline(f"job {rec['id']} {rec.get('name')}: {klass}; left to controller {ctl}")
+                return
         max_att = int(d.get("max_attempts", get(self.cfg, "watcher.max_attempts", 3)))
         attempts = self.state.attempts(rec["id"])
         noauto = bool(d.get("noauto")) or d.get("resume", "resubmit") == "none"
+
+        # One problem, not N jobs: fingerprint the failure and consult the escalation map first.
+        tail = logs.tail(rec.get("stdout_path"), int(get(self.cfg, "watcher.log_tail_lines", 150)))
+        fp = escalation.fingerprint(klass, rec.get("exit_code"), tail)
+        ekey = escalation.key(rec, fp)
+        rec["fingerprint"] = fp
+        e = self.esc.count(rec, ekey) if escalation.is_failure(klass) else self.esc.get(ekey)
+        q = self.esc.quarantined(rec.get("name"))
+        if q is None and escalation.is_failure(klass) and self.esc.should_quarantine(
+                e, int(get(self.cfg, "watcher.quarantine_after", 3)), int(get(self.cfg, "watcher.quarantine_min_nodes", 2))):
+            self.esc.put_quarantine(rec.get("name") or rec["id"], e, ekey)
+            q = self.esc.quarantined(rec.get("name"))
+            msg = (f"auto-quarantined {rec.get('name')}: {e['count']} identical failures across {len(e['nodes'])} nodes ({fp}). "
+                   f"No resubmits or Claude turns for this job name until you reply `unquarantine {rec.get('name')}`.")
+            self.state.logline(msg); self.state.note(msg)
+            self.post_job(rec, msg)
+        if q is not None:
+            rec["handled"], rec["escalated"] = True, False  # the first job of this fingerprint carries NEEDS YOU
+            d["quarantined"] = True
+            self.state.logline(f"job {rec['id']} {rec.get('name')}: {klass} while quarantined ({e['count']} so far); no action")
+            return
+        if self.esc.awaiting_user(ekey):
+            rec["handled"], rec["escalated"] = True, False  # the first job of this fingerprint carries NEEDS YOU
+            every = float(get(self.cfg, "watcher.escalation_delta_min", 30)) * 60
+            if time.time() - float(e.get("last_posted", 0)) >= every:
+                e["last_posted"] = time.time()
+                self.post_job(rec, f"+1 identical failure ({e['count']} so far: {fp}); still waiting on your reply")
+            self.state.logline(f"job {rec['id']} {rec.get('name')}: repeat of escalated {fp!r} ({e['count']}); no turn")
+            return
 
         if tier in (0, 1) and not noauto and attempts < max_att:
             try:
@@ -277,9 +315,8 @@ class Loop:
                 rec["fix_error"] = str(e)
                 # fall through to a Claude turn
 
-        if self.state.sentinel("BLOCKED") or time.time() < self.quota_until or llm_budget[0] <= 0:
+        if self.state.sentinel("BLOCKED") or time.time() < self.quota_until or not self.take_turn_budget(llm_budget):
             return  # leave unhandled; retried next tick
-        llm_budget[0] -= 1
 
         if noauto:
             instr, kind = "instr_noauto.md", "tier3"
@@ -297,10 +334,41 @@ class Loop:
                         NODES=rec.get("nodes", ""), EVIDENCE=rec.get("evidence", ""), ATTEMPTS=str(attempts), MAX_ATTEMPTS=str(max_att),
                         FIXES=json.dumps(rec.get("fixes", [])), SCRIPT=rec.get("script") or "?", SUBMIT_LINE=rec.get("submit_line", ""),
                         DIRECTIVES=json.dumps(d), STDOUT=rec.get("stdout_path") or "?",
-                        LOG_TAIL=logs.tail(rec.get("stdout_path"), int(get(self.cfg, "watcher.log_tail_lines", 150))),
-                        INSTRUCTIONS=instructions)
+                        LOG_TAIL=tail, INSTRUCTIONS=instructions)
         res = run_turn(self.cfg, self.state, kind, prompt, tag=rec["id"])
         self.after_turn(res, rec)
+
+    def controller_of(self, rec: dict) -> str | None:
+        """For an array task: the id of a tracked controller job (watcher.controller_name_glob) in the same
+        workdir that was alive when the task was submitted. Such arrays are re-driven by their controller."""
+        import fnmatch
+        glob = get(self.cfg, "watcher.controller_name_glob", "*_ctl")
+        if not glob or "_" not in rec["id"] or fnmatch.fnmatch(rec.get("name") or "", glob):
+            return None
+        sub = rec.get("submit") or ""
+        for c in self.state.jobs.values():
+            if not fnmatch.fnmatch(c.get("name") or "", glob) or c.get("workdir") != rec.get("workdir"):
+                continue
+            if c.get("submit", "") <= sub and (slurm.is_live(c.get("state", "")) or c.get("end", "") >= sub):
+                return c["id"]
+        return None
+
+    def take_turn_budget(self, llm_budget: list[int]) -> bool:
+        """Per-tick cap and a rolling-hour cap; True if a turn may be spent now."""
+        if llm_budget[0] <= 0:
+            return False
+        per_hour = int(get(self.cfg, "watcher.max_llm_turns_per_hour", 12))
+        now = time.time()
+        self.turn_times = [t for t in self.turn_times if now - t < 3600]
+        if per_hour > 0 and len(self.turn_times) >= per_hour:
+            if not self.state.meta.get("hour_budget_noted"):
+                self.state.meta["hour_budget_noted"] = True
+                self.state.logline(f"hourly LLM turn budget ({per_hour}) spent; deferring turns")
+            return False
+        self.state.meta["hour_budget_noted"] = False
+        llm_budget[0] -= 1
+        self.turn_times.append(now)
+        return True
 
     def after_turn(self, res: dict, rec: dict | None) -> None:
         if res["quota"]:
@@ -326,6 +394,8 @@ class Loop:
                 rec["escalated"], rec["resolved"] = True, False
             if status in ("OK", "ACTED"):
                 rec["resolved"] = True
+            if rec.get("esc_key"):
+                self.esc.mark(rec["esc_key"], status, self.thread_for(rec))
             self.post_job(rec, f"{status}: {text}")
         else:
             self.slack.post(text)
@@ -365,7 +435,9 @@ class Loop:
                 (self.state.dir / "BLOCKED").unlink(missing_ok=True)
                 self.state.logline("user replied; clearing BLOCKED")
                 self.state.meta["turn_failures"] = 0
-            llm_budget[0] -= 1
+            if scope_rec is not None and self.esc.resolve_name(scope_rec.get("name")):
+                self.state.logline(f"user replied re {scope_rec.get('name')}; escalation answered, repeats will escalate afresh")
+            llm_budget[0] -= 1  # replies bypass the hourly cap: the user is waiting
             scope = f" (in the Slack thread of job {scope_rec['id']}, {scope_rec.get('name')})" if scope_rec else ""
             prompt = render("turn_chat.md", TARGET=str(self.target), STATE=str(self.state.dir), RECEIVED=msg.get("received", ""),
                             SOURCE=msg.get("source", "?"), CLUSTER=cluster_name(self.cfg), SCOPE=scope, TEXT=text, SUMMARY=table(self.state))
@@ -401,7 +473,20 @@ class Loop:
         m = re.match(r"^(pause|resume)\s+(\S+)$", t)
         if m and m.group(2) in self.state.jobs:
             self.state.jobs[m.group(2)].setdefault("directive_overrides", {})["noauto"] = (m.group(1) == "pause")
+            if m.group(1) == "resume":
+                self.esc.resolve_name(self.state.jobs[m.group(2)].get("name"))
             self.slack.post(f"{m.group(1)}d auto-fixes for {m.group(2)}", thread_ts=thread); return True
+        m = re.match(r"^(unquarantine|release)\s+(\S+)$", t)
+        if m:
+            name = m.group(2)
+            if name in self.state.jobs:
+                name = self.state.jobs[name].get("name") or name
+            ok = self.esc.lift(name)
+            self.slack.post(f"quarantine lifted for {name}" if ok else f"{name} is not quarantined", thread_ts=thread); return True
+        if t == "quarantine":
+            q = self.esc.quarantine
+            self.slack.post("\n".join(f"{n}: since {v['since']}, {v['count']} failures on {len(v['nodes'])} nodes ({v['key'].split('|',1)[1]})"
+                                      for n, v in q.items()) or "nothing quarantined", thread_ts=thread); return True
         return False
 
     # ------------------------------------------------------------------- digest
@@ -473,7 +558,7 @@ class Loop:
             st.save()
             live = any(slurm.is_live(r.get("state", "")) for r in st.jobs.values())
             interval = get(self.cfg, "watcher.poll_interval_sec", 300) if live else get(self.cfg, "watcher.idle_poll_interval_sec", 1800)
-            if st.inbox.glob("*.json") and inbound:
+            if inbound and any(st.inbox.glob("*.json")):
                 interval = min(interval, 20)  # responsive chat
             for _ in range(int(max(1, interval - (time.time() - tick_start)))):
                 if self.stop or any(st.inbox.glob("*.json")) or st.sentinel("STOP"):

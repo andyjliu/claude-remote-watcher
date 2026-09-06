@@ -9,7 +9,8 @@ from pathlib import Path
 from .config import REPO, get, tier
 from .state import State, now_iso
 
-QUOTA_RX = re.compile(r"usage limit|rate limit|quota|credit balance|overloaded|too many requests", re.I)
+QUOTA_RX = re.compile(r"usage limit|rate limit|session limit|quota|credit balance|overloaded|too many requests", re.I)
+QUOTA_HTTP = {429, 529}  # api_error_status the CLI reports for rate/usage limits and overload
 
 
 def render(template: str, **vars: str) -> str:
@@ -40,7 +41,7 @@ def run_turn(cfg: dict, state: State, kind: str, prompt: str, tag: str = "") -> 
     out.with_suffix(".err").write_text(stderr)
     (out.with_suffix(".prompt.md")).write_text(prompt)
 
-    result, is_error = "", False
+    result, is_error, api_status = "", False, None
     for line in reversed(stdout.splitlines()):
         line = line.strip()
         if line.startswith("{"):
@@ -48,6 +49,9 @@ def run_turn(cfg: dict, state: State, kind: str, prompt: str, tag: str = "") -> 
                 obj = json.loads(line)
                 result = obj.get("result", "") or ""
                 is_error = bool(obj.get("is_error"))
+                api_status = obj.get("api_error_status")
+                if api_status is None and isinstance(obj.get("error"), dict):
+                    api_status = obj["error"].get("status") or obj["error"].get("status_code")
                 break
             except json.JSONDecodeError:
                 continue
@@ -57,7 +61,7 @@ def run_turn(cfg: dict, state: State, kind: str, prompt: str, tag: str = "") -> 
     if "SLACK:" in result:
         slack = result.rsplit("SLACK:", 1)[1]
         slack = slack.split("STATUS:", 1)[0].strip()
-    quota = bool(QUOTA_RX.search(stdout + stderr)) and (rc != 0 or is_error)
+    quota = (api_status in QUOTA_HTTP or bool(QUOTA_RX.search(stdout + stderr))) and (rc != 0 or is_error)
     ok = rc == 0 and not is_error and bool(status)
     state.logline(f"claude turn done rc={rc} status={status or '<none>'} ok={ok}")
     return {"rc": rc, "ok": ok, "result": result, "status": status, "slack": slack, "quota": quota, "path": str(out)}

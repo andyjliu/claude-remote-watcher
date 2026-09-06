@@ -67,7 +67,8 @@ def header(state: State, target: str) -> str:
           f"slack chat {'on' if m.get('slack_inbound') else 'off'}, last poll {_ago(m.get('last_poll')) or '?'} ago")
     l2 = (f"running {sum(1 for r in live if norm_state(r['state']) == 'RUNNING')} · pending "
           f"{sum(1 for r in live if norm_state(r['state']) != 'RUNNING')} · done(24h) {done} · failed(24h) {failed}"
-          + (f" · NEEDS YOU: {', '.join(waiting)}" if waiting else ""))
+          + (f" · NEEDS YOU: {', '.join(waiting)}" if waiting else "")
+          + (f" · QUARANTINED: {', '.join(m['quarantine'])}" if m.get("quarantine") else ""))
     return l1 + "\n" + l2
 
 

@@ -52,6 +52,14 @@ Then just `sbatch` from that directory as usual. Optional per-script directives:
 | trivial crash (import/path/name/arg) | log pattern | Claude turn: patch once, save diff to `patches/`, resubmit (tier 2) |
 | anything else, stalls, exhausted retries | — | Claude turn: diagnose, propose, ask you on Slack (tier 3) |
 
+Identical failures are one problem, not many: each failure is fingerprinted
+(job name + normalized last error line). After Claude escalates one, siblings
+and reruns with the same fingerprint skip the turn and add a threaded `+1` line
+until you reply in that thread. Three identical failures on two nodes
+quarantine the job name (no resubmits, no turns) until you say
+`unquarantine <name>`. Array tasks launched by a running `*_ctl` job are left
+to that controller (`watcher.controller_name_glob`).
+
 Tier-0/1 need no LLM. A healthy directory costs zero tokens. Each Claude turn
 is a fresh `claude -p` session with the chosen tier's model and budget
 (`claude.tiers` in `cluster.yaml`); its memory is `.watcher/agent_notes.md`,
@@ -61,8 +69,8 @@ auto-compacted past `notes_max_kb`.
 
 - **Slack**: one DM thread per job lineage. Reply in a thread to scope your
   message to that job ("approve", "just resubmit", "leave it"). Top-level
-  `status`, `report`, `stop`, `resume`, `pause <job>` are answered without a
-  Claude turn; anything else becomes a Claude chat turn and a standing order.
+  `status`, `report`, `stop`, `resume`, `pause <job>`, `quarantine`,
+  `unquarantine <name>` are answered without a Claude turn; anything else becomes a Claude chat turn and a standing order.
   Two-way needs a Socket Mode token — see Slack setup.
   Every message is prefixed with the cluster it came from (`[orchard] ...`,
   from `slurm.cluster`). When several clusters share the bot, address one with
