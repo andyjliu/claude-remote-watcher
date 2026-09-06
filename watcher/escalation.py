@@ -72,6 +72,7 @@ class Escalations:
 
     def mark(self, k: str, status: str, thread_ts: str | None = None) -> None:
         e = self.get(k)
+        e["last_status"] = status
         if status == "ESCALATE":
             e["escalated"], e["resolved"] = True, False
         elif status in ("OK", "ACTED"):
@@ -82,6 +83,19 @@ class Escalations:
     def awaiting_user(self, k: str) -> bool:
         e = self.map.get(k)
         return bool(e and e.get("escalated") and not e.get("resolved"))
+
+    def settled_for(self, k: str, rec: dict) -> str | None:
+        """Claude already answered this fingerprint with OK/ACTED for a sibling of the same array (or the same
+        lineage): the verdict carries over, no new turn. Returns the id of the job that got the turn, else None.
+        Scoped to the same base job id so a *new* array failing the same way still gets a fresh look."""
+        e = self.map.get(k)
+        if not (e and e.get("resolved") and e.get("last_status") in ("OK", "ACTED")):
+            return None
+        base = rec["id"].split("_")[0]
+        for j in e.get("jobs", []):
+            if j.split("_")[0] == base and j != rec["id"]:
+                return j
+        return None
 
     def resolve_name(self, name: str | None) -> int:
         """The user replied about this job: every open escalation under its name is answered."""

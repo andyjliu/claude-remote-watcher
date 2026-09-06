@@ -288,6 +288,12 @@ class Loop:
             d["quarantined"] = True
             self.state.logline(f"job {rec['id']} {rec.get('name')}: {klass} while quarantined ({e['count']} so far); no action")
             return
+        prior = self.esc.settled_for(ekey, rec)
+        if prior and escalation.is_failure(klass):
+            rec["handled"], rec["escalated"] = True, False
+            rec["last_status"] = e.get("last_status")
+            self.state.logline(f"job {rec['id']} {rec.get('name')}: same failure as {prior} ({fp!r}), which Claude settled as {e.get('last_status')}; no turn")
+            return
         if self.esc.awaiting_user(ekey):
             rec["handled"], rec["escalated"] = True, False  # the first job of this fingerprint carries NEEDS YOU
             every = float(get(self.cfg, "watcher.escalation_delta_min", 30)) * 60

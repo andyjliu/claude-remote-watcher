@@ -78,3 +78,17 @@ def test_hourly_budget(lp):
     b = [10]
     assert lp.take_turn_budget(b) and lp.take_turn_budget(b) and not lp.take_turn_budget(b)
     assert b == [8]
+
+
+def test_ok_verdict_carries_to_array_siblings_but_not_new_arrays(lp, tmp_path, monkeypatch):
+    log = tmp_path / "out.log"; log.write_text("RuntimeError: stale build\n")
+    lp.cfg["watcher"]["quarantine_after"] = 10
+    monkeypatch.setattr(loop_mod, "run_turn", lambda cfg, st, kind, prompt, tag="": (lp._turns.append(tag) or
+                        {"rc": 0, "ok": True, "result": "x", "status": "OK", "slack": "stale, ignore", "quota": False, "path": ""}))
+    r0 = _task(lp, 0, "n1", log); lp.handle(r0, [3])
+    r1 = _task(lp, 1, "n2", log); lp.handle(r1, [3])
+    assert lp._turns == ["500_0"] and r1["handled"] and not r1.get("escalated")   # sibling: verdict carried over
+    assert len(lp._posts) == 1
+    r9 = _task(lp, 0, "n1", log); r9["id"] = "600_0"; lp.state.jobs["600_0"] = r9
+    lp.handle(r9, [3])
+    assert lp._turns == ["500_0", "600_0"]                                       # a new array gets a fresh look
