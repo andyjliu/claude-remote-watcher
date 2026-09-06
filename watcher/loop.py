@@ -405,8 +405,6 @@ class Loop:
     # -------------------------------------------------------------------- inbox
     def process_inbox(self, llm_budget: list[int]) -> None:
         for p in sorted(self.state.inbox.glob("*.json")):
-            if time.time() < self.quota_until or llm_budget[0] <= 0:
-                return
             try:
                 msg = json.loads(p.read_text())
             except json.JSONDecodeError:
@@ -414,20 +412,27 @@ class Loop:
             text = (msg.get("text") or "").strip()
             thread = msg.get("thread_ts")
             done = p.with_suffix(".done")
-            p.rename(done)
+            addr = None
             if msg.get("source") == "slack":
-                # Every DM reaches every cluster (and directory) sharing this bot: keep only what is ours.
-                self.slack.remember_user_ts(msg.get("ts"))
+                # Every cluster sharing this bot polls the same DM channel: keep only what is ours.
                 addr, text = self.slack.address(text)
                 if not self.slack.for_us(addr):
-                    self.state.logline(f"inbox: addressed to {addr!r}, not us; ignoring: {text[:80]}"); continue
+                    p.rename(done); self.state.logline(f"inbox: addressed to {addr!r}, not us; ignoring: {text[:80]}"); continue
                 if thread and not self.slack.is_our_thread(thread, self.state.jobs):
-                    self.state.logline(f"inbox: reply in a thread that is not ours ({thread}); ignoring: {text[:80]}"); continue
+                    p.rename(done); self.state.logline(f"inbox: reply in a thread that is not ours ({thread}); ignoring: {text[:80]}"); continue
             scope_rec = None
             if thread:
                 scope_rec = next((r for r in self.state.jobs.values() if r.get("thread_ts") == thread), None)
-            if self.shortcut(text, thread, scope_rec):
-                continue
+            if self.shortcut(text, thread, scope_rec):  # no Claude turn: answer even when out of budget
+                p.rename(done); continue
+            if msg.get("source") == "slack" and addr is None and not thread:
+                # Unaddressed top-level DM: it is an answer to whoever spoke last, not a question for everyone.
+                last = msg.get("last_speaker")
+                if last and last != self.slack.tag.lower():
+                    p.rename(done); self.state.logline(f"inbox: unaddressed; last speaker was {last!r}, leaving it to them: {text[:80]}"); continue
+            if time.time() < self.quota_until or llm_budget[0] <= 0:
+                return  # leave it queued for the next tick
+            p.rename(done)
             with open(self.state.orders, "a") as f:
                 f.write(f"- {msg.get('received', now_iso())} via {msg.get('source')}"
                         f"{' (re job ' + scope_rec['id'] + ')' if scope_rec else ''}: {text}\n")
@@ -524,7 +529,7 @@ class Loop:
         inbound = self.slack.start_listener()
         st.meta["slack_inbound"] = inbound
         if not st.meta.get("announced"):
-            self.slack.post(f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off (no app token)'}")
+            self.slack.post(f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off'}")
             st.meta["announced"] = True
         st.save()
 
@@ -548,6 +553,8 @@ class Loop:
                     self.blocked_notified = True
                 elif not st.sentinel("BLOCKED"):
                     self.blocked_notified = False
+                if inbound:
+                    self.slack.poll_inbound()
                 self.process_inbox(budget)
                 self.maybe_digest()
                 if time.time() > self.quota_until:
@@ -558,9 +565,9 @@ class Loop:
             st.save()
             live = any(slurm.is_live(r.get("state", "")) for r in st.jobs.values())
             interval = get(self.cfg, "watcher.poll_interval_sec", 300) if live else get(self.cfg, "watcher.idle_poll_interval_sec", 1800)
-            if inbound and any(st.inbox.glob("*.json")):
-                interval = min(interval, 20)  # responsive chat
             for _ in range(int(max(1, interval - (time.time() - tick_start)))):
+                if inbound and self.slack.poll_inbound():  # self-paced to slack.poll_sec; a new DM ends the wait
+                    st.save()
                 if self.stop or any(st.inbox.glob("*.json")) or st.sentinel("STOP"):
                     break
                 time.sleep(1)

@@ -1,9 +1,12 @@
-"""Slack DM to a single user. Outbound is stdlib-only; inbound (Socket Mode) needs slack_sdk."""
+"""Slack DM to a single user, stdlib-only. Inbound is polled (conversations.history / .replies), not pushed:
+Socket Mode load-balances each event across the open connections of one app, so with several clusters
+sharing the bot only one of them would ever hear a given DM."""
 from __future__ import annotations
 
 import json
 import re
-import threading
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -24,10 +27,12 @@ class Slack:
         self.state = state
         self.token = _read(cfg_path(cfg, "slack.bot_token_file"))
         self.user_id = _read(cfg_path(cfg, "slack.user_id_file"))
-        self.app_token = _read(cfg_path(cfg, "slack.app_token_file"))
         self.enabled = bool(self.token and self.user_id)
         self.channel: str | None = state.meta.get("slack_channel")
-        self._listener: threading.Thread | None = None
+        self.poll_sec = float(get(cfg, "slack.poll_sec", 60))
+        self.thread_watch_hours = float(get(cfg, "slack.thread_watch_hours", 24))
+        self._next_poll = 0.0
+        self._cold_idx = 0
         # Several clusters (and directories) may share this bot and this DM channel, so every
         # outbound message is prefixed "[<cluster>]" and inbound DMs can be addressed to one cluster.
         self.tag = cluster_name(cfg)
@@ -36,25 +41,27 @@ class Slack:
         self.peers.discard(self.tag.lower())
 
     # ---- multi-cluster routing --------------------------------------------
-    _ADDR = re.compile(r"^(@)?([A-Za-z][\w.-]*)(\s*[:,]\s*|\s+|$)(.*)$", re.S)
+    # "[name] cmd", "(name) cmd", "@name cmd", "name: cmd", "name, cmd", "name - cmd", "name> cmd", "name cmd"
+    _ADDR = re.compile(r"^\s*(?P<wrap>[\[(<{]|@|#)?\s*(?P<name>[A-Za-z][\w.-]*)\s*(?P<close>[\])>}])?(?P<sep>\s*[:,;>-]+\s*|\s+|$)(?P<rest>.*)$", re.S)
 
     def address(self, text: str) -> tuple[str | None, str]:
-        """Parse a leading '@name', 'name:' or 'name <cmd>' where name is this cluster, a known peer,
-        or 'all'/'everyone' (those two need the '@' or ':' form so 'all done' stays plain text).
+        """Parse a leading cluster name in any common form -- '[name] ...', '@name ...', 'name: ...',
+        'name, ...', 'name - ...', 'name ...' -- where name is this cluster, a known peer, or
+        'all'/'everyone'/'both' (those need a wrapper or punctuation so 'all done' stays plain text).
         Returns (name.lower() or None, remaining text)."""
-        m = self._ADDR.match(text.strip())
+        m = self._ADDR.match(text or "")
         if not m:
             return None, text
-        at, name, sep, rest = m.groups()
-        name_l = name.lower()
-        if name_l in ("all", "everyone"):
-            return (name_l, rest.strip()) if (at or ":" in sep or "," in sep) else (None, text)
+        name_l = m.group("name").lower()
+        marked = bool(m.group("wrap") or m.group("close") or m.group("sep").strip())
+        if name_l in ("all", "everyone", "both", "everybody"):
+            return ("all", m.group("rest").strip()) if marked else (None, text)
         if name_l == self.tag.lower() or name_l in self.peers:
-            return name_l, rest.strip()
+            return name_l, m.group("rest").strip()
         return None, text
 
     def for_us(self, name: str | None) -> bool:
-        return name is None or name in ("all", "everyone") or name == self.tag.lower()
+        return name is None or name == "all" or name == self.tag.lower()
 
     def _remember(self, key: str, ts: str | None, cap: int = 400) -> None:
         if not ts:
@@ -65,21 +72,27 @@ class Slack:
             del lst[:-cap]
 
     def remember_user_ts(self, ts: str | None) -> None:
-        """Every user DM reaches every cluster; remember its ts so a thread the user starts on their
-        own message is not mistaken for another cluster's job thread."""
+        """Remember the ts of a top-level user DM so a thread the user starts on their own message is
+        not mistaken for another cluster's job thread, and so its replies are polled."""
         self._remember("seen_user_ts", ts)
+        self._touch_thread(ts)
 
     def is_our_thread(self, thread_ts: str, jobs: dict) -> bool:
         if any(r.get("thread_ts") == thread_ts for r in jobs.values()):
             return True
         return thread_ts in self.state.meta.get("posted_ts", []) or thread_ts in self.state.meta.get("seen_user_ts", [])
 
-    def _learn_peer(self, text: str) -> None:
+    def _learn_peer(self, text: str) -> str | None:
+        """Cluster name from a '[name] ...' bot post (ours or a peer's); learns new peers."""
         m = re.match(r"^\[([A-Za-z][\w.-]*)\]\s", text or "")
-        if m and m.group(1).lower() != self.tag.lower() and m.group(1).lower() not in self.peers:
-            self.peers.add(m.group(1).lower())
+        if not m:
+            return None
+        name = m.group(1).lower()
+        if name != self.tag.lower() and name not in self.peers:
+            self.peers.add(name)
             self.state.meta["peer_clusters"] = sorted(self.peers)
-            self.state.logline(f"slack: learned peer cluster {m.group(1)!r} from its posts")
+            self.state.logline(f"slack: learned peer cluster {name!r} from its posts")
+        return name
 
     # ---- outbound -------------------------------------------------------
     def _api(self, method: str, payload: dict) -> dict:
@@ -113,45 +126,138 @@ class Slack:
             return None
         if not thread_ts:
             self._remember("posted_ts", ts)  # roots of threads that belong to this watcher
+        self._touch_thread(thread_ts or ts)
         return ts
 
-    # ---- inbound --------------------------------------------------------
+    # ---- inbound (polled) ---------------------------------------------------
+    def _threads(self) -> dict:
+        return self.state.meta.setdefault("slack_threads", {})
+
+    def _touch_thread(self, root: str | None, cursor: str | None = None) -> None:
+        """Mark a thread root as ours/active so its replies are polled. Activity in the last
+        thread_watch_hours keeps it watched; recent activity (<2h) makes it 'hot' (polled every cycle)."""
+        if not root:
+            return
+        t = self._threads().setdefault(root, {"cursor": root})
+        t["active"] = time.time()
+        if cursor and float(cursor) > float(t.get("cursor", "0")):
+            t["cursor"] = cursor
+
+    def _prune_threads(self) -> None:
+        cutoff = time.time() - self.thread_watch_hours * 3600
+        th = self._threads()
+        for root in [r for r, t in th.items() if t.get("active", 0) < cutoff]:
+            del th[root]
+
     def start_listener(self) -> bool:
-        """Socket Mode listener writing DMs to <state>/inbox/*.json. Returns whether it started."""
-        if not (self.enabled and self.app_token):
+        """Inbound needs only the bot token + user id (scope im:history). Returns whether it is on."""
+        if not self.enabled:
             return False
         try:
-            from slack_sdk.socket_mode import SocketModeClient
-            from slack_sdk.socket_mode.request import SocketModeRequest
-            from slack_sdk.socket_mode.response import SocketModeResponse
-            from slack_sdk.web import WebClient
-        except ImportError:
-            self.state.logline("slack_sdk not installed; inbound Slack disabled")
+            self._ensure_channel()
+        except Exception as e:  # noqa: BLE001
+            self.state.logline(f"slack: cannot open DM channel: {e}")
             return False
-
-        client = SocketModeClient(app_token=self.app_token, web_client=WebClient(token=self.token))
-
-        def handle(c: SocketModeClient, req: SocketModeRequest) -> None:
-            if req.type == "events_api":
-                c.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
-                ev = req.payload.get("event", {})
-                if ev.get("type") == "message" and ev.get("channel_type") == "im" and ev.get("bot_id") and not ev.get("thread_ts"):
-                    self._learn_peer(ev.get("text", ""))  # another cluster's "[name] ..." post
-                if (ev.get("type") == "message" and ev.get("channel_type") == "im"
-                        and ev.get("user") == self.user_id and not ev.get("bot_id") and not ev.get("subtype")):
-                    msg = {"ts": ev.get("ts"), "thread_ts": ev.get("thread_ts"), "text": ev.get("text", ""),
-                           "channel": ev.get("channel"), "received": now_iso(), "source": "slack"}
-                    (self.state.inbox / f"{ev.get('ts', '0').replace('.', '_')}.json").write_text(json.dumps(msg))
-
-        client.socket_mode_request_listeners.append(handle)
-
-        def run() -> None:
-            try:
-                client.connect()
-                threading.Event().wait()  # keep thread alive; client reconnects on its own
-            except Exception as e:  # noqa: BLE001
-                self.state.logline(f"slack listener died: {e}")
-
-        self._listener = threading.Thread(target=run, name="slack-listener", daemon=True)
-        self._listener.start()
+        if "slack_cursor" not in self.state.meta:
+            self.state.meta["slack_cursor"] = f"{time.time():.6f}"  # never replay history from before this watcher
+        self._next_poll = 0.0
         return True
+
+    def poll_inbound(self, force: bool = False) -> int:
+        """Fetch new DMs (and replies in our threads) into <state>/inbox/*.json. Self-paced to
+        slack.poll_sec; cheap to call every second. Returns number of messages written."""
+        if not self.enabled or (not force and time.time() < self._next_poll):
+            return 0
+        self._next_poll = time.time() + self.poll_sec
+        n = 0
+        try:
+            n += self._poll_channel()
+            n += self._poll_threads()
+            self.state.meta["slack_last_poll"] = now_iso()
+            self.state.meta.pop("slack_poll_error", None)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = float(e.headers.get("Retry-After", "60") or 60)
+                self._next_poll = time.time() + max(wait, self.poll_sec)
+                self.state.logline(f"slack: rate limited; next poll in {wait:.0f}s")
+            else:
+                self.state.meta["slack_poll_error"] = f"{now_iso()} HTTP {e.code}"
+                self.state.logline(f"slack poll failed: HTTP {e.code}")
+        except Exception as e:  # noqa: BLE001
+            self.state.meta["slack_poll_error"] = f"{now_iso()} {type(e).__name__}: {e}"
+            self.state.logline(f"slack poll failed: {type(e).__name__}: {e}")
+        return n
+
+    def _poll_channel(self) -> int:
+        """Top-level DMs since the cursor, oldest first. Bot posts teach us peer names and who spoke
+        last; the user's posts land in the inbox tagged with that last speaker."""
+        ch = self._ensure_channel()
+        cursor = str(self.state.meta.get("slack_cursor", "0"))
+        msgs: list[dict] = []
+        payload: dict = {"channel": ch, "oldest": cursor, "inclusive": False, "limit": 200}
+        while True:
+            out = self._api("conversations.history", payload)
+            msgs.extend(out.get("messages", []))
+            nxt = (out.get("response_metadata") or {}).get("next_cursor")
+            if not (out.get("has_more") and nxt):
+                break
+            payload["cursor"] = nxt
+        msgs.sort(key=lambda m: float(m.get("ts", "0")))
+        n = 0
+        speaker = self.state.meta.get("slack_last_speaker")
+        for m in msgs:
+            if m.get("bot_id") or m.get("subtype") == "bot_message":
+                name = self._learn_peer(m.get("text", ""))
+                if name:
+                    speaker = name
+                if m.get("ts") in self.state.meta.get("posted_ts", []):
+                    speaker = self.tag.lower()
+                continue
+            if self._is_user_msg(m):
+                self.remember_user_ts(m.get("ts"))
+                self._inbox(m, thread_ts=None, last_speaker=speaker)
+                n += 1
+        if msgs:
+            self.state.meta["slack_cursor"] = msgs[-1]["ts"]
+        self.state.meta["slack_last_speaker"] = speaker
+        return n
+
+    def _poll_threads(self) -> int:
+        """Replies never show up in channel history, so poll conversations.replies per watched root:
+        hot roots (activity < 2h) every cycle, the rest round-robin, three per cycle."""
+        self._prune_threads()
+        th = self._threads()
+        if not th:
+            return 0
+        now = time.time()
+        hot = [r for r, t in th.items() if now - t.get("active", 0) < 7200]
+        cold = sorted(r for r in th if r not in hot)
+        pick = list(hot)
+        if cold:
+            for i in range(min(3, len(cold))):
+                pick.append(cold[(self._cold_idx + i) % len(cold)])
+            self._cold_idx = (self._cold_idx + 3) % len(cold)
+        n = 0
+        ch = self._ensure_channel()
+        for root in pick:
+            t = th[root]
+            out = self._api("conversations.replies", {"channel": ch, "ts": root, "oldest": t.get("cursor", root),
+                                                      "inclusive": False, "limit": 100})
+            replies = sorted((m for m in out.get("messages", []) if m.get("ts") != root), key=lambda m: float(m["ts"]))
+            for m in replies:
+                if self._is_user_msg(m):
+                    self._inbox(m, thread_ts=root, last_speaker=None)
+                    t["active"] = now
+                    n += 1
+            if replies:
+                t["cursor"] = replies[-1]["ts"]
+        return n
+
+    def _is_user_msg(self, m: dict) -> bool:
+        return (m.get("user") == self.user_id and not m.get("bot_id")
+                and m.get("subtype") in (None, "thread_broadcast", "file_share"))
+
+    def _inbox(self, m: dict, thread_ts: str | None, last_speaker: str | None) -> None:
+        msg = {"ts": m.get("ts"), "thread_ts": thread_ts, "text": m.get("text", ""), "channel": self.channel,
+               "received": now_iso(), "source": "slack", "last_speaker": last_speaker}
+        (self.state.inbox / f"{str(m.get('ts', '0')).replace('.', '_')}.json").write_text(json.dumps(msg))

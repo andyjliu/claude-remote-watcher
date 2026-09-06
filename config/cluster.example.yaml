@@ -42,8 +42,11 @@ claude:
 slack:
   bot_token_file: ~/.config/claude-watcher/slack_bot_token   # xoxb-...  (chat:write, im:write, im:history)
   user_id_file:   ~/.config/claude-watcher/slack_user_id     # U...      sole recipient
-  app_token_file: ~/.config/claude-watcher/slack_app_token   # xapp-...  Socket Mode; enables inbound
   thread_per_job: true
+  poll_sec: 60               # inbound is polled (conversations.history); Socket Mode is not used because Slack
+                             # delivers each event to only ONE of an app's connections, so clusters sharing the
+                             # bot would each hear a random subset of your DMs. Slack polls cost no Claude quota.
+  thread_watch_hours: 24     # poll replies in our threads with activity this recent (hot <2h: every cycle; rest: 3/cycle)
   peer_clusters: []          # other clusters sharing this bot, e.g. [orchard]; DMs addressed to them are ignored here.
                              # Also learned automatically from their "[name] ..." posts, so this is only a warm start.
 

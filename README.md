@@ -71,13 +71,13 @@ auto-compacted past `notes_max_kb`.
   message to that job ("approve", "just resubmit", "leave it"). Top-level
   `status`, `report`, `stop`, `resume`, `pause <job>`, `quarantine`,
   `unquarantine <name>` are answered without a Claude turn; anything else becomes a Claude chat turn and a standing order.
-  Two-way needs a Socket Mode token — see Slack setup.
+  Two-way needs the `im:history` scope — see Slack setup.
   Every message is prefixed with the cluster it came from (`[orchard] ...`,
   from `slurm.cluster`). When several clusters share the bot, address one with
-  `orchard status`, `orchard: report`, or `@orchard leave t_oom alone`
-  (`@all ...` / `all: ...` for everyone); an unaddressed message is handled by
-  every cluster, and a reply inside a job thread only by the cluster that owns
-  the thread.
+  `[orchard] status`, `orchard: report`, or `@orchard leave t_oom alone`
+  (`@all ...` / `all: ...` for everyone); an unaddressed message goes to the
+  cluster that spoke last, and a reply inside a job thread only to the cluster
+  that owns the thread.
 - **claude.ai/code**: the watcher runs `claude remote-control --name cw:<dir>@<cluster>`;
   pick that session on claude.ai/code or the mobile app. It starts in
   `.watcher/`, reads the notes, and can leave standing orders for the loop.
@@ -85,13 +85,22 @@ auto-compacted past `notes_max_kb`.
 
 ## Slack setup
 
-Outbound needs `~/.config/claude-watcher/slack_bot_token` (`xoxb-`, scopes
-`chat:write`, `im:write`) and `slack_user_id` (`U...`). Two-way chat needs, in
-api.slack.com for the same app: Socket Mode **on** (gives an `xapp-` token with
-`connections:write`) → Event Subscriptions → bot event `message.im` → scope
-`im:history` → reinstall to workspace → save the token to
-`~/.config/claude-watcher/slack_app_token` (mode 600). No public URL needed;
-the listener runs inside the watcher job.
+`~/.config/claude-watcher/slack_bot_token` (`xoxb-`, scopes `chat:write`,
+`im:write`, `im:history`) and `slack_user_id` (`U...`). That is enough for
+two-way chat: the watcher polls the DM channel every `slack.poll_sec` (60 s) and
+its own threads with `conversations.history` / `conversations.replies`. No Socket
+Mode, no app token, no public URL. (Socket Mode was dropped on purpose: Slack
+hands each event to one of an app's open connections, so several clusters sharing
+the bot each heard a random subset of your messages.) Polling Slack spends no
+Claude quota; a Claude turn happens only when a message needs an answer.
+
+Several clusters can share the bot. Every post is prefixed `[<cluster>]`. Address
+one cluster with any of `[babel] status`, `@babel status`, `babel: status`,
+`babel, status`, `babel - status` or `babel status`; `@all` / `all:` reaches
+every cluster. An unaddressed top-level DM goes to the cluster that posted most
+recently before it (it is read as a reply to that post); a reply inside a job
+thread goes to the cluster that owns the thread. Shortcuts such as `status`
+answer on every cluster regardless.
 
 ## Lifecycle
 

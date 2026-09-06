@@ -53,6 +53,14 @@ def _note(r: dict) -> str:
     return "" if reason == "None" or not is_live(r.get("state", "")) else reason
 
 
+def _chat(m: dict) -> str:
+    if not m.get("slack_inbound"):
+        return "off"
+    if m.get("slack_poll_error"):
+        return f"ERROR ({m['slack_poll_error'][:60]})"
+    return f"on (polled {_ago(m.get('slack_last_poll')) or '?'} ago)"
+
+
 def header(state: State, target: str) -> str:
     m = state.meta
     live = [r for r in state.jobs.values() if is_live(r.get("state", ""))]
@@ -64,7 +72,7 @@ def header(state: State, target: str) -> str:
     up = _ago(m.get("watcher_started")) if m.get("watcher_started") else "?"
     where = target.rstrip('/').rsplit('/', 1)[-1] + (f"@{m['cluster']}" if m.get("cluster") else "")
     l1 = (f"{where} — watcher {m.get('watcher_job', '?')} up {up}, "
-          f"slack chat {'on' if m.get('slack_inbound') else 'off'}, last poll {_ago(m.get('last_poll')) or '?'} ago")
+          f"slack chat {_chat(m)}, last poll {_ago(m.get('last_poll')) or '?'} ago")
     l2 = (f"running {sum(1 for r in live if norm_state(r['state']) == 'RUNNING')} · pending "
           f"{sum(1 for r in live if norm_state(r['state']) != 'RUNNING')} · done(24h) {done} · failed(24h) {failed}"
           + (f" · NEEDS YOU: {', '.join(waiting)}" if waiting else "")
