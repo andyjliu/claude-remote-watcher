@@ -46,6 +46,7 @@ def sl(tmp_path, monkeypatch):
     s = Slack(_cfg(tmp_path), st)
     api = FakeAPI()
     monkeypatch.setattr(s, "_api", api)
+    monkeypatch.setattr(s, "_api_get", api)  # conversations.replies goes through the GET helper
     s.api = api
     assert s.start_listener()
     st.meta["slack_cursor"] = "1000.000000"

@@ -285,8 +285,11 @@ class Slack:
         ch = self._ensure_channel()
         for root in pick:
             t = th[root]
-            out = self._api("conversations.replies", {"channel": ch, "ts": root, "oldest": t.get("cursor", root),
-                                                      "inclusive": False, "limit": 100})
+            # conversations.replies reads channel/ts from the query string, not a JSON
+            # body: an _api (JSON POST) call returns invalid_arguments ("missing required
+            # field: channel/ts") and silently drops every in-thread reply. Use _api_get.
+            out = self._api_get("conversations.replies", {"channel": ch, "ts": root, "oldest": t.get("cursor", root),
+                                                          "inclusive": "false", "limit": 100})
             replies = sorted((m for m in out.get("messages", []) if m.get("ts") != root), key=lambda m: float(m["ts"]))
             for m in replies:
                 if self._is_user_msg(m):
