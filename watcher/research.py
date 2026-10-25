@@ -238,6 +238,7 @@ class Research:
         self.cur = {"out": out, "resume": resume, "deadline": time.time() + timeout, "events": events, "reason": reason}
         self.m["orders_offset"] = self._orders_size()
         self.m["last_start"], self.m["last_reason"] = now_iso(), reason
+        self.m["in_flight"] = True
         self.m["turns_day"] = self.turns_today() + 1
         self.m["turns_total"] = int(self.m.get("turns_total", 0)) + 1
         model, budget = tier(self.cfg, "research")
@@ -252,6 +253,7 @@ class Research:
         res = parse(rc, stdout, stderr)
         res["path"] = str(out)
         self.proc = None
+        self.m["in_flight"] = False
         self.m["last_end"] = time.time()
         self.state.logline(f"research turn done rc={rc} status={res['status_line'] or '<none>'} ok={res['ok']}")
         if res["session"]:
@@ -308,7 +310,7 @@ class Research:
         if not self.enabled:
             return ""
         m = self.m
-        if self.proc is not None:
+        if self.proc is not None or m.get("in_flight"):  # in_flight: seen from another process (`watch status`)
             state = f"turn in flight since {m.get('last_start', '?')} ({m.get('last_reason', '')})"
         elif self.sentinel("DONE").exists():
             state = "DONE: " + self.sentinel("DONE").read_text().splitlines()[0][:200]
