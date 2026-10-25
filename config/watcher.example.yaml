@@ -6,3 +6,8 @@ watcher:
 claude:
   tiers:
     tier3: {model: opus, budget_usd: 8}
+# Research mode for this directory (see cluster.example.yaml for every key):
+# research:
+#   enabled: true
+#   prompt_files: [AGENTS.md, SPEC.md, docs/loop.md]
+#   control_files: [SPEC.md, AGENTS.md, CLAUDE.md, "docs/**", ".claude/**"]

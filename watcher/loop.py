@@ -17,6 +17,7 @@ from .claude_turn import REPO, render, run_turn
 from .compact import maybe_compact
 from .config import cluster_name, get, path as cfg_path
 from .report import digest, open_needs, status, table
+from .research import Research
 from .slack import Slack
 from .state import State, now_iso
 
@@ -65,6 +66,7 @@ class Loop:
         self.quota_until = 0.0
         self.turn_times: list[float] = []  # rolling-hour LLM budget
         self.esc = escalation.Escalations(self.state)
+        self.research = Research(cfg, self.state, self.slack, self.my_id)
         self.stop = False
         signal.signal(signal.SIGTERM, self._on_term)
 
@@ -101,6 +103,14 @@ class Loop:
             if j["id"] != self.my_id:
                 slurm.run(["scancel", j["id"]])
                 self.state.logline(f"cancelled watcher job {j['id']}")
+
+    def window_sec(self) -> float:
+        """Seconds left before this allocation exits for its successor (inf when not a watcher job)."""
+        limit = slurm.parse_slurm_time(get(self.cfg, "slurm.time", "1-00:00:00"))
+        if not limit or not self.my_id:
+            return float("inf")
+        margin = timedelta(minutes=float(get(self.cfg, "slurm.chain_margin_min", 60)))
+        return (limit - margin).total_seconds() - (time.time() - self.start)
 
     def walltime_exceeded(self) -> bool:
         limit = slurm.parse_slurm_time(get(self.cfg, "slurm.time", "1-00:00:00"))
@@ -249,7 +259,7 @@ class Loop:
     def handle(self, rec: dict, llm_budget: list[int]) -> None:
         d = directives.effective(self.state.dir, rec)
         rec["directives_effective"] = d
-        if (rec["klass"] == "CRASHED" and not d.get("ignore") and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
+        if (rec["klass"] == "CRASHED" and not d.get("ignore") and not self.research_owns() and get(self.cfg, "claude.classify_unknown", True) and not rec.get("classified")
                 and self.esc.quarantined(rec.get("name")) is None  # quarantined names get no turns at all, not even triage
                 and not self.state.sentinel("BLOCKED") and time.time() > self.quota_until and llm_budget[0] > 0):
             self.classify_with_claude(rec)
@@ -322,6 +332,13 @@ class Loop:
                 rec["fix_error"] = str(e)
                 # fall through to a Claude turn
 
+        if self.research_owns():
+            # One agent edits the experiment dir: failures the deterministic fixer cannot handle go to the research turn.
+            rec["handled"], rec["routed_to_research"] = True, True
+            self.research.note_job(rec, tail)
+            self.state.logline(f"job {rec['id']} {rec.get('name')}: {klass}; routed to the research loop")
+            return
+
         if self.state.sentinel("BLOCKED") or time.time() < self.quota_until or not self.take_turn_budget(llm_budget):
             return  # leave unhandled; retried next tick
 
@@ -344,6 +361,9 @@ class Loop:
                         LOG_TAIL=tail, INSTRUCTIONS=instructions)
         res = run_turn(self.cfg, self.state, kind, prompt, tag=rec["id"])
         self.after_turn(res, rec)
+
+    def research_owns(self) -> bool:
+        return self.research.enabled and bool(get(self.cfg, "research.owns_failures", True))
 
     def controller_of(self, rec: dict) -> str | None:
         """For an array task: the id of a tracked controller job (watcher.controller_name_glob) in the same
@@ -447,12 +467,14 @@ class Loop:
                 (self.state.dir / "BLOCKED").unlink(missing_ok=True)
                 self.state.logline("user replied; clearing BLOCKED")
                 self.state.meta["turn_failures"] = 0
+            self.research.unblock(explicit=False)
             if scope_rec is not None and self.esc.resolve_name(scope_rec.get("name")):
                 self.state.logline(f"user replied re {scope_rec.get('name')}; escalation answered, repeats will escalate afresh")
             llm_budget[0] -= 1  # replies bypass the hourly cap: the user is waiting
             scope = f" (in the Slack thread of job {scope_rec['id']}, {scope_rec.get('name')})" if scope_rec else ""
             prompt = render("turn_chat.md", TARGET=str(self.target), STATE=str(self.state.dir), RECEIVED=msg.get("received", ""),
-                            SOURCE=msg.get("source", "?"), CLUSTER=cluster_name(self.cfg), SCOPE=scope, TEXT=text, SUMMARY=table(self.state))
+                            SOURCE=msg.get("source", "?"), CLUSTER=cluster_name(self.cfg), SCOPE=scope, TEXT=text, SUMMARY=table(self.state),
+                            RESEARCH=self.research.chat_context())
             res = run_turn(self.cfg, self.state, "chat", prompt, tag="chat")
             if res["quota"] or not res["ok"]:
                 self.after_turn(res, None)
@@ -471,7 +493,19 @@ class Loop:
         t = text.lower().strip()
         if t in ("status", "report"):
             body = digest(self.state, str(self.target), link=self.slack.permalink) if t == "report" else status(self.state, str(self.target))
+            if self.research.enabled:
+                body = self.research.summary() + "\n" + body
             self.slack.post(body, thread_ts=thread); return True
+        m = re.match(r"^research(?:\s+(status|pause|resume))?$", t)
+        if m and self.research.enabled:
+            cmd = m.group(1) or "status"
+            if cmd == "pause":
+                self.research.sentinel("PAUSED").write_text(f"{now_iso()}: paused via {thread or 'dm'}\n")
+            elif cmd == "resume":
+                self.research.sentinel("PAUSED").unlink(missing_ok=True)
+                self.research.sentinel("DONE").unlink(missing_ok=True)
+                self.research.unblock(explicit=True)
+            self.slack.post(self.research.summary(), thread_ts=thread); return True
         m = re.match(r"^status\s+(\d+)h$", t)
         if m:
             self.slack.post(status(self.state, str(self.target), float(m.group(1))), thread_ts=thread); return True
@@ -481,6 +515,7 @@ class Loop:
         if t in ("resume", "unblock"):
             (self.state.dir / "BLOCKED").unlink(missing_ok=True)
             self.state.meta["turn_failures"] = 0
+            self.research.unblock(explicit=True)
             self.slack.post("BLOCKED cleared", thread_ts=thread); return True
         m = re.match(r"^(pause|resume)\s+(\S+)$", t)
         if m and m.group(2) in self.state.jobs:
@@ -576,7 +611,8 @@ class Loop:
         inbound = self.slack.start_listener()
         st.meta["slack_inbound"] = inbound
         if not st.meta.get("announced"):
-            self.slack.post(f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off'}")
+            self.slack.post(f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off'}"
+                            + ("; research mode on" if self.research.enabled else ""))
             st.meta["announced"] = True
         st.save()
 
@@ -584,10 +620,10 @@ class Loop:
             tick_start = time.time()
             try:
                 if st.sentinel("STOP"):
-                    st.logline("STOP present; shutting down"); self.cancel_successors(); self.rc_stop()
+                    st.logline("STOP present; shutting down"); self.cancel_successors(); self.rc_stop(); self.research_stop()
                     self.slack.post(f"watcher stopped for {self.target}"); st.meta["announced"] = False; st.save(); return 0
                 if self.walltime_exceeded():
-                    st.logline("walltime margin reached; exiting for successor"); self.ensure_successor(); self.rc_stop(); st.save(); return 0
+                    st.logline("walltime margin reached; exiting for successor"); self.ensure_successor(); self.rc_stop(); self.research_stop(); st.save(); return 0
                 if self.my_id and int(time.time()) % 3600 < 600:
                     self.ensure_successor()
                 events = self.discover()
@@ -604,6 +640,7 @@ class Loop:
                 if inbound:
                     self.slack.poll_inbound()
                 self.process_inbox(budget)
+                self.research_tick()
                 self.maybe_digest()
                 if time.time() > self.quota_until:
                     maybe_compact(self.cfg, st)
@@ -616,8 +653,23 @@ class Loop:
             for _ in range(int(max(1, interval - (time.time() - tick_start)))):
                 if inbound and self.slack.poll_inbound():  # self-paced to slack.poll_sec; a new DM ends the wait
                     st.save()
-                if self.stop or any(st.inbox.glob("*.json")) or st.sentinel("STOP"):
+                if self.stop or any(st.inbox.glob("*.json")) or st.sentinel("STOP") or self.research.wants_tick():
                     break
                 time.sleep(1)
-        self.rc_stop(); st.save()
+        self.rc_stop(); self.research_stop(); st.save()
         return 0
+
+    # ----------------------------------------------------------------- research
+    def research_tick(self) -> None:
+        if not self.research.enabled:
+            return
+        quota_ok = time.time() > self.quota_until and not self.state.sentinel("BLOCKED")
+        res = self.research.tick(table(self.state), self.window_sec(), quota_ok)
+        if res and res.get("quota"):
+            self.after_turn(res, None)
+
+    def research_stop(self) -> None:
+        if self.research.proc is not None:
+            self.state.logline("research turn still in flight at shutdown; terminating (the next allocation starts fresh)")
+            self.research.kill()
+            self.research.finish(143, count_failure=False)

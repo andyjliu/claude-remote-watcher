@@ -28,6 +28,7 @@ claude:
     chat:     {model: claude-opus-4-8, budget_usd: 4}  # replies to your Slack messages / standing orders
     compact:  {model: sonnet,         budget_usd: 1}   # agent_notes.md compaction
     report:   {model: sonnet,         budget_usd: 1}   # prose paragraph at the top of the daily digest (watcher.report_llm_summary)
+    research: {model: opus,           budget_usd: 15}  # research-mode turns (research.enabled), run in the experiment dir
   # When a FAILED job matches neither the oom nor the trivial regexes, ask the `classify`
   # model which it is before spending a tier-3 turn: TRIVIAL->tier2, OOM->tier1,
   # TRANSIENT->tier0 resubmit, REAL/UNSURE->tier3.
@@ -92,3 +93,21 @@ watcher:
     - "oom-kill"
     - "Out of memory"
     - "MemoryError"
+
+# Research mode (off by default; turn it on per directory in <dir>/.watcher/watcher.yaml).
+# A goal-driven loop of bounded Claude turns that run in the experiment dir, resuming one session per
+# allocation. Slack messages become standing orders it reads; failed jobs the deterministic fixer
+# can't handle are routed to it instead of to tier-2/3 turns. Contract: watcher/research.py docstring.
+research:
+  enabled: false
+  prompt_files: []           # goal documents, relative to the experiment dir, read first in every fresh session
+  control_files: []          # globs relative to the experiment dir; hashed, and edits are denied. A change -> BLOCKED until `research resume`
+  owns_failures: true        # route tier-2/3 job failures to the research turn (one agent edits the repo)
+  turn_timeout_min: 120
+  min_window_min: 30         # don't start a turn with less than this left before the allocation chains
+  working_gap_sec: 60        # pause between turns while the agent says WORKING
+  wait_default_min: 15       # WAITING with no time or job ids
+  wait_max_min: 120          # cap on any WAITING
+  max_turn_failures: 3       # consecutive failed turns -> research BLOCKED
+  max_turns_per_day: 60
+

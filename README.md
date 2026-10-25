@@ -89,6 +89,31 @@ auto-compacted past `notes_max_kb`.
   `.watcher/`, reads the notes, and can leave standing orders for the loop.
 - **shell**: `watch say`.
 
+## Research mode
+
+Set `research.enabled: true` in `<dir>/.watcher/watcher.yaml` (keys in
+`config/cluster.example.yaml`) and the watcher also drives a goal-driven research
+agent in that directory. The goal lives in the experiment repo
+(`research.prompt_files`, e.g. `AGENTS.md`, `SPEC.md`, `docs/loop.md`). Each turn
+is a bounded `claude -p` run in the experiment dir, resuming one session per
+allocation. It runs in the background, so Slack and job triage keep working
+while it thinks. Every turn ends with
+
+```
+SLACK: <posted now if it starts with MILESTONE:/BLOCKER:/QUESTION:>
+STATUS: WORKING | WAITING <ISO time and/or job ids> | BLOCKED | DONE
+```
+
+and the watcher wakes it on `WORKING`, on an expired wait, when a waited-on job
+changes state, when you send a message (it becomes a standing order that the
+next turn reads), or when a job fails in a way the deterministic fixer can't
+handle (in research mode those go to the research agent, not to tier-2/3 turns).
+`research.control_files` are hashed and edit-denied. Any change blocks the loop
+until you reply `research resume`. Slack `research [status|pause|resume]` controls it.
+Research turns use `.watcher/settings.research.json`, which is looser than the
+watcher's own: commits, branch pushes, PRs and project-env installs are allowed;
+merges, force-pushes, pushes to `main`, `rm` and `sudo` are not.
+
 ## Slack setup
 
 `~/.config/claude-watcher/slack_bot_token` (`xoxb-`, scopes `chat:write`,

@@ -37,7 +37,10 @@ def _prepare(target: Path) -> dict:
             p.write_text(f"# {f[:-3].replace('_', ' ')} for {target}\n\n(created {now_iso()})\n")
     (sd / "CLAUDE.md").write_text((REPO / "prompts" / "CLAUDE.md").read_text())
     tmpl = (REPO / "claude" / "settings.template.json").read_text()
-    (sd / "settings.json").write_text(tmpl.replace("{{STATE}}", str(sd)).replace("{{CONF_DIR}}", str(CONF_DIR)).replace("{{REPO}}", str(REPO)))
+    (sd / "settings.json").write_text(tmpl.replace("{{STATE}}", _rule_path(sd)).replace("{{CONF_DIR}}", _rule_path(CONF_DIR))
+                                      .replace("{{REPO}}", _rule_path(REPO)))
+    if get(cfg, "research.enabled", False):
+        _render_research_settings(cfg, sd)
     (sd / "watcher.sbatch").write_text(SBATCH_BODY.format(repo=REPO, state=sd, target=cfg["_target"]))
     if not (sd / "watcher.yaml").exists():
         (sd / "watcher.yaml").write_text("# per-directory overrides (see config/watcher.example.yaml)\n{}\n")
@@ -49,6 +52,41 @@ def _prepare(target: Path) -> dict:
         if ".watcher/" not in cur:
             git_excl.write_text(cur.rstrip("\n") + "\n.watcher/\n")
     return cfg
+
+
+def _rule_path(p: Path) -> str:
+    """Absolute path for a permission rule written as `//{path}`: Claude Code reads `//x` as /x."""
+    return str(p).lstrip("/")
+
+
+def _render_research_settings(cfg: dict, sd: Path) -> None:
+    """settings.research.json: the research deny-list plus Edit/Write denies on every control file."""
+    target = Path(cfg["_target"])
+    tmpl = (REPO / "claude" / "settings.research.template.json").read_text()
+    for k, v in (("{{STATE}}", sd), ("{{CONF_DIR}}", CONF_DIR), ("{{REPO}}", REPO), ("{{TARGET}}", target)):
+        tmpl = tmpl.replace(k, _rule_path(v))
+    data = json.loads(tmpl)
+    deny = data["permissions"]["deny"]
+    for pat in get(cfg, "research.control_files", []) or []:
+        deny += [f"Edit(//{_rule_path(target)}/{pat})", f"Write(//{_rule_path(target)}/{pat})"]
+    (sd / "settings.research.json").write_text(json.dumps(data, indent=1))
+    _trust_dir(target)
+
+
+def _trust_dir(d: Path) -> None:
+    """Pre-accept the workspace-trust dialog for a dir a headless turn runs in."""
+    cj = Path("~/.claude.json").expanduser()
+    try:
+        data = json.loads(cj.read_text()) if cj.exists() else {}
+    except json.JSONDecodeError:
+        return
+    proj = data.setdefault("projects", {}).setdefault(str(d), {})
+    if proj.get("hasTrustDialogAccepted"):
+        return
+    proj["hasTrustDialogAccepted"] = True
+    tmp = cj.with_suffix(".json.cwtmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, cj)
 
 
 def _trust_workspace(sd: Path) -> None:
@@ -114,6 +152,9 @@ def cmd_status(a):
     for s in ("STOP", "BLOCKED"):
         if st.sentinel(s):
             print(f"!! {s}: {(st.dir / s).read_text().strip()}")
+    if get(cfg, "research.enabled", False):
+        from .research import Research
+        print(Research(cfg, st, None, "").summary())
     print(status(st, cfg["_target"], a.hours).replace("\n```", "").replace("```\n", ""))
 
 

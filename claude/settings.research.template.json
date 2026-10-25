@@ -1,0 +1,36 @@
+{
+  "_comment": "Rendered per watched dir into .watcher/settings.research.json for research turns, which run in the experiment dir with bypassPermissions. Looser than settings.json: research turns may commit, push branches, open PRs and install into the project env. `watch start` appends Edit/Write denies for research.control_files. Deny rules hold even under bypassPermissions.",
+  "permissions": {
+    "deny": [
+      "Bash(rm:*)", "Bash(rmdir:*)", "Bash(shred:*)", "Bash(dd:*)", "Bash(mkfs:*)", "Bash(sudo:*)",
+      "Bash(chmod -R 777:*)", "Bash(chown -R:*)",
+      "Bash(srun:*)", "Bash(salloc:*)", "Bash(scancel -u:*)", "Bash(scancel --user:*)",
+      "Bash(scontrol update:*)", "Bash(scontrol delete:*)", "Bash(sacctmgr:*)",
+      "Bash(crontab:*)", "Bash(scrontab:*)",
+      "Bash(git merge:*)", "Bash(git rebase:*)", "Bash(git reset --hard:*)", "Bash(git clean:*)",
+      "Bash(git commit --amend:*)", "Bash(git filter-branch:*)", "Bash(git branch -D:*)", "Bash(git tag -d:*)",
+      "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push --force-with-lease:*)", "Bash(git push --delete:*)",
+      "Bash(git push origin main:*)", "Bash(git push origin master:*)", "Bash(git push origin HEAD:main:*)",
+      "Bash(git push origin HEAD:master:*)", "Bash(git push origin +:*)",
+      "Bash(git remote set-url:*)", "Bash(git remote remove:*)", "Bash(git remote add:*)",
+      "Bash(git switch --discard-changes:*)", "Bash(git switch -f:*)", "Bash(git switch --force:*)",
+      "Bash(git checkout -- :*)", "Bash(git checkout .:*)", "Bash(git stash drop:*)", "Bash(git stash clear:*)",
+      "Bash(gh pr merge:*)", "Bash(gh repo delete:*)", "Bash(gh api:*)", "Bash(gh release:*)",
+      "Bash(pip install:*)", "Bash(pip3 install:*)", "Bash(conda install:*)", "Bash(conda create:*)",
+      "Bash(pip install --user:*)", "Bash(uv tool install:*)", "Bash(npm install -g:*)",
+      "Read(//{{TARGET}}/.env)", "Read(//{{TARGET}}/**/.env)", "Read(~/.ssh/**)", "Read(//{{CONF_DIR}}/**)",
+      "Edit(//{{STATE}}/settings.json)", "Write(//{{STATE}}/settings.json)",
+      "Edit(//{{STATE}}/settings.research.json)", "Write(//{{STATE}}/settings.research.json)",
+      "Edit(//{{STATE}}/watcher.yaml)", "Write(//{{STATE}}/watcher.yaml)",
+      "Edit(//{{STATE}}/jobs.json)", "Write(//{{STATE}}/jobs.json)",
+      "Edit(//{{STATE}}/meta.json)", "Write(//{{STATE}}/meta.json)",
+      "Edit(//{{STATE}}/CLAUDE.md)", "Write(//{{STATE}}/CLAUDE.md)",
+      "Edit(//{{STATE}}/watcher.sbatch)", "Write(//{{STATE}}/watcher.sbatch)",
+      "Edit(//{{STATE}}/standing_orders.md)", "Write(//{{STATE}}/standing_orders.md)",
+      "Edit(//{{STATE}}/research/**)", "Write(//{{STATE}}/research/**)",
+      "Edit(//{{STATE}}/turns/**)", "Write(//{{STATE}}/turns/**)",
+      "Edit(//{{CONF_DIR}}/**)", "Write(//{{CONF_DIR}}/**)",
+      "Edit(//{{REPO}}/**)", "Write(//{{REPO}}/**)"
+    ]
+  }
+}

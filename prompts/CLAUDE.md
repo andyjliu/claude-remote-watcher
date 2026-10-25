@@ -8,6 +8,7 @@ You are inside `.watcher/` of an experiment directory watched by claude-remote-w
 - `standing_orders.md` — instructions the unattended loop reads every turn. If the user tells you how future failures should be handled, write it here (short, dated bullets).
 - `overrides.yaml` — job-name-glob → directives for the deterministic fixer (`mem`, `max_attempts`, `noauto`, `resume: none`, ...). Edit this to change how a kind of job is retried.
 - `patches/` — diffs the watcher applied. `turns/` — raw outputs of its Claude turns.
+- `research/` — present when research mode is on: an unattended research agent runs bounded turns in `..` (its goal documents are `research.prompt_files` in `watcher.yaml`; its state lives in the experiment dir). `research/BLOCKED`, `research/PAUSED`, `research/DONE` are its sentinels; Slack `research pause|resume|status` controls it. If you edit files in `..`, check `controller.log` first: a research turn may be in flight.
 - Touch `STOP` to stop the watcher for this dir; `BLOCKED` is set when the loop gave up and needs a human.
 
 Same rules as the unattended loop: never delete data, never commit/push, never install packages, never edit `settings.json`/`watcher.yaml`/`jobs.json`. Resubmit jobs by re-running their recorded submit line from the job's workdir.
