@@ -103,6 +103,7 @@ research:
   prompt_files: []           # goal documents, relative to the experiment dir, read first in every fresh session
   control_files: []          # globs relative to the experiment dir; hashed, and edits are denied. A change -> BLOCKED until `research resume`
   owns_failures: true        # route tier-2/3 job failures to the research turn (one agent edits the repo)
+  env: {}                    # extra env for research turns, merged into settings.research.json (e.g. CLAUDE_CODE_SUBAGENT_MODEL: opus)
   turn_timeout_min: 120
   min_window_min: 30         # don't start a turn with less than this left before the allocation chains
   working_gap_sec: 60        # pause between turns while the agent says WORKING

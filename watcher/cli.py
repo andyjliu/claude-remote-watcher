@@ -69,6 +69,9 @@ def _render_research_settings(cfg: dict, sd: Path) -> None:
     deny = data["permissions"]["deny"]
     for pat in get(cfg, "research.control_files", []) or []:
         deny += [f"Edit(//{_rule_path(target)}/{pat})", f"Write(//{_rule_path(target)}/{pat})"]
+    env = get(cfg, "research.env", {}) or {}  # e.g. {CLAUDE_CODE_SUBAGENT_MODEL: opus}
+    if env:
+        data.setdefault("env", {}).update({str(k): str(v) for k, v in env.items()})
     (sd / "settings.research.json").write_text(json.dumps(data, indent=1))
     _trust_dir(target)
 
