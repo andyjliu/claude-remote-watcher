@@ -141,3 +141,27 @@ def test_hub_model_configurable(tmp_path):
     cfg["claude"] = {"tiers": {"hub": {"model": "sonnet", "budget_usd": 2}}}
     h = Hub(cfg, State(tmp_path / "s"), dry_run=True)
     assert (h.model, h.budget) == ("sonnet", 2.0)
+
+
+def test_read_dir_times_out_and_uses_last_good(tmp_path, monkeypatch):
+    import threading as th
+    from watcher import hub as hubmod
+    from watcher.hub import Hub
+    from watcher.state import State
+    tok = tmp_path / "tok"; tok.write_text("x")
+    ids = {k: "41f95cc0892f81299f12eb76d8ee0d83" for k in ("sources", "specs", "checkpoints", "history", "mappings", "jobs")}
+    h = Hub({"hub": {"notion": ids, "notion_token_file": str(tok)}}, State(tmp_path / "s"), dry_run=True)
+    h.READ_TIMEOUT_SEC = 0.2
+    good = hd.DirInfo(path=Path("/x"), has_state=True, watcher_live=True)
+    release = th.Event()
+    monkeypatch.setattr(hubmod.hd, "dir_info", lambda *a: good)
+    assert h.read_dir("/x", {}, {}) is good
+    monkeypatch.setattr(hubmod.hd, "dir_info", lambda *a: (release.wait(5), None)[1] or good)
+    t0 = time.time()
+    assert h.read_dir("/x", {}, {}) is good          # hung read: falls back to the last snapshot
+    assert h.read_dir("/y", {}, {}) is None          # no snapshot: skip
+    t1 = time.time()
+    assert h.read_dir("/x", {}, {}) is good and time.time() - t1 < 0.1   # still hung: no second wait
+    assert t1 - t0 < 1
+    release.set(); time.sleep(0.1)
+    assert h.read_dir("/x", {}, {}) is good and "/x" not in h._reads

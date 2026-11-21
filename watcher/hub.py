@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -56,6 +57,8 @@ class Hub:
         self.interval = float(get(cfg, "hub.status_interval_min", 10)) * 60
         self.prefix = get(cfg, "slurm.job_name_prefix", "cw") + ":"
         self._bot: str | None = None
+        self._reads: dict[str, dict] = {}         # dir -> in-flight read {"thread", "box", "since"}
+        self._good: dict[str, hd.DirInfo] = {}    # dir -> last complete read
         # model for the hub's own Claude turns (progress summaries); claude.tiers.hub, default opus
         t = get(cfg, "claude.tiers.hub", {}) or {}
         self.model, self.budget = str(t.get("model", "opus")), float(t.get("budget_usd", 5))
@@ -120,7 +123,14 @@ class Hub:
         cost_cache = self.m.setdefault("turn_costs", {})
         infos: dict[str, hd.DirInfo] = {}
         for d in dirs:
-            infos[d] = hd.dir_info(Path(d), live_watchers, cost_cache.setdefault(d, {}))
+            info = self.read_dir(d, live_watchers, cost_cache.setdefault(d, {}))
+            if info is not None:
+                infos[d] = info
+        # a dir that can't be read (hung NFS) and has no earlier snapshot still maps its jobs,
+        # but its spec, mapping and checkpoint rows are left as they are this cycle
+        map_specs = {d: v["spec"] for d, v in dirs.items() if v["spec"]}
+        skip_specs = {map_specs[d] for d in dirs if d not in infos and d in map_specs}
+        dirs = {d: v for d, v in dirs.items() if d in infos}
 
         self.sync_mappings(dirs, infos, source["id"], page_of, now)
         dir_to_spec = {d: v["spec"] for d, v in dirs.items() if v["spec"]}
@@ -129,14 +139,14 @@ class Hub:
 
         manual = self.manual_job_specs(slug_of)
         tags = self.m.setdefault("tags", {})
-        hd.map_jobs(jobs, dir_to_spec, tags, set(page_of), manual)
+        hd.map_jobs(jobs, map_specs, tags, set(page_of), manual)
         live_ids = {j.id for j in jobs}
         for jid in [k for k in tags if k not in live_ids and k not in self.m.get("job_pages", {})]:
             tags.pop(jid, None)
         self.sync_jobs(jobs, source["id"], page_of, now)
 
         spec_dirs = {slug: infos[d] for d, slug in dir_to_spec.items()}
-        gpu_h = self.spec_gpu_hours(dir_to_spec, tags, now)
+        gpu_h = self.spec_gpu_hours(map_specs, tags, now)
         self.sync_checkpoints(spec_dirs, page_of, now)
         spec_etas = {slug: hd.spec_eta(i.checkpoints, self.tz, now) for slug, i in spec_dirs.items()}
 
@@ -148,6 +158,8 @@ class Hub:
         queued = []
         for pid, p in by_page.items():
             s = slug_of[pid]
+            if s in skip_specs:
+                continue
             new_state = hd.derive_state(spec_dirs.get(s), live_by_spec.get(s, 0), read(p, "State"))
             self.sync_spec(p, s, spec_dirs.get(s), new_state, spec_etas.get(s), now, gpu_h.get(s))
             if new_state == "queued":
@@ -167,6 +179,39 @@ class Hub:
                            f"{len(dirs)} dirs, {self.notion.calls - calls0} notion calls"
                            + (" [dry run]" if self.dry else ""))
         return status
+
+    READ_TIMEOUT_SEC = 45
+
+    def read_dir(self, d: str, live_watchers: dict, cost_cache: dict) -> hd.DirInfo | None:
+        """dir_info() in a daemon thread with a timeout. A read stuck in the kernel (an NFS open that never
+        returns, seen on babel-z9-24) can't be interrupted, so the thread is left behind and the dir's last good
+        snapshot is used until the read finishes. Daemon threads don't hold up the job's exit."""
+        r = self._reads.get(d)
+        fresh = r is None
+        if fresh:
+            box: dict = {}
+
+            def run():
+                try:
+                    box["info"] = hd.dir_info(Path(d), live_watchers, cost_cache)
+                except Exception as e:  # noqa: BLE001
+                    box["error"] = e
+            t = threading.Thread(target=run, name=f"hub-read:{d}", daemon=True)
+            r = self._reads[d] = {"thread": t, "box": box, "since": datetime.now(timezone.utc)}
+            t.start()
+        r["thread"].join(self.READ_TIMEOUT_SEC if fresh else 0)   # an earlier hung read gets no extra wait
+        if r["thread"].is_alive():
+            mins = (datetime.now(timezone.utc) - r["since"]).total_seconds() / 60
+            self.state.logline(f"hub: reading {d}/.watcher has hung for {mins:.0f} min (NFS?); "
+                               + ("using the last good snapshot" if d in self._good else "skipping its spec rows this cycle"))
+            return self._good.get(d)
+        self._reads.pop(d, None)
+        if "error" in r["box"]:
+            e = r["box"]["error"]
+            self.state.logline(f"hub: reading {d}/.watcher failed: {type(e).__name__}: {e}")
+            return self._good.get(d)
+        self._good[d] = r["box"]["info"]
+        return self._good[d]
 
     def discover_specs(self, specs: list[dict], now: datetime) -> list[dict]:
         """Hourly: a "SPEC:" child page of the backlog with no Specs row gets one (state not started)."""
