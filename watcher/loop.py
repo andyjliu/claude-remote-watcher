@@ -71,6 +71,7 @@ class Loop:
         if get(cfg, "hub.enabled", False):
             from .hub import Hub
             self.hub = Hub(cfg, self.state, self.slack)
+            self.state.logline(f"hub mode: model {self.hub.model} (${self.hub.budget}/turn), every {self.hub.interval / 60:g} min")
         self.stop = False
         signal.signal(signal.SIGTERM, self._on_term)
 
@@ -616,7 +617,7 @@ class Loop:
         inbound = False if self.hub else self.slack.start_listener()
         st.meta["slack_inbound"] = inbound
         if not st.meta.get("announced"):
-            self.slack.post(f"control-center hub up (job {self.my_id})" if self.hub else
+            self.slack.post(f"control-center hub up (job {self.my_id}; model {self.hub.model})" if self.hub else
                             f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off'}"
                             + ("; research mode on" if self.research.enabled else ""))
             st.meta["announced"] = True

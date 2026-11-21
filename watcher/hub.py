@@ -56,6 +56,9 @@ class Hub:
         self.interval = float(get(cfg, "hub.status_interval_min", 10)) * 60
         self.prefix = get(cfg, "slurm.job_name_prefix", "cw") + ":"
         self._bot: str | None = None
+        # model for the hub's own Claude turns (progress summaries); claude.tiers.hub, default opus
+        t = get(cfg, "claude.tiers.hub", {}) or {}
+        self.model, self.budget = str(t.get("model", "opus")), float(t.get("budget_usd", 5))
 
     @property
     def m(self) -> dict:

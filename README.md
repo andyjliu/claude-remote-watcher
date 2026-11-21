@@ -131,7 +131,8 @@ Slack alert when a spec's API ledger passes 80% and 100% of `budget.api_usd`.
 Research turns run with `shim/sbatch` first on `PATH`: it tags submissions `--comment=cc:<spec_id>`
 and refuses new submissions while `.watcher/NO_NEW_JOBS` exists. When a research loop is waiting
 and a running checkpoint's ETA is over an hour old, the watcher runs a small Sonnet `eta` turn
-($0.50 cap) that only rewrites `checkpoints.json`.
+($0.50 cap) that only rewrites `checkpoints.json`. The hub's own Claude turns (progress summaries)
+use `claude.tiers.hub` (default opus).
 
 **Adding a compute source.** On the new cluster: install the repo, copy the Notion token to
 `~/.config/claude-watcher/notion_token` (mode 600), add the `hub:` block from

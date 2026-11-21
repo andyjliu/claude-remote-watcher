@@ -30,6 +30,7 @@ claude:
     report:   {model: sonnet,         budget_usd: 1}   # prose paragraph at the top of the daily digest (watcher.report_llm_summary)
     research: {model: opus,           budget_usd: 15}  # research-mode turns (research.enabled), run in the experiment dir
     eta:      {model: sonnet,         budget_usd: 0.5} # research mode: refresh checkpoint ETAs while the loop waits (control center)
+    hub:      {model: opus,           budget_usd: 5}   # control-center hub's Claude turns (progress summaries)
   # When a FAILED job matches neither the oom nor the trivial regexes, ask the `classify`
   # model which it is before spending a tier-3 turn: TRIVIAL->tier2, OOM->tier1,
   # TRANSIENT->tier0 resubmit, REAL/UNSURE->tier3.

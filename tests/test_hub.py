@@ -129,3 +129,15 @@ def test_eta_reason(tmp_path):
     assert r.eta_reason(now) is None
     r.m.update(wait_until=now + 3600, eta_last_end=now - 600)  # refreshed recently
     assert r.eta_reason(now) is None
+
+
+def test_hub_model_configurable(tmp_path):
+    from watcher.hub import Hub
+    from watcher.state import State
+    tok = tmp_path / "tok"; tok.write_text("x")
+    ids = {k: "41f95cc0892f81299f12eb76d8ee0d83" for k in ("sources", "specs", "checkpoints", "history", "mappings", "jobs")}
+    cfg = {"hub": {"notion": ids, "notion_token_file": str(tok)}}
+    assert Hub(cfg, State(tmp_path / "s"), dry_run=True).model == "opus"
+    cfg["claude"] = {"tiers": {"hub": {"model": "sonnet", "budget_usd": 2}}}
+    h = Hub(cfg, State(tmp_path / "s"), dry_run=True)
+    assert (h.model, h.budget) == ("sonnet", 2.0)
