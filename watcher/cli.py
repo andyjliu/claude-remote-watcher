@@ -168,6 +168,9 @@ def cmd_hub_once(a):
     cfg = config.load(target)
     st = State(Path(cfg["_state"]))
     hub = Hub(cfg, st, None, dry_run=a.dry_run or None)
+    ran = hub.commands.poll(force=True)
+    if ran:
+        print(f"ran {ran} control command(s); see the Commands table or {st.dir / 'controller.log'}")
     status = hub.cycle()
     st.save()
     print(json.dumps(status, indent=1, default=str))

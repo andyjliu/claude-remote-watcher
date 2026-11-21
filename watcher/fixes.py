@@ -27,6 +27,8 @@ def _resubmit_args(rec: dict) -> list[str]:
 
 
 def resubmit(state: State, rec: dict, extra_args: list[str] | None = None, reason: str = "") -> str:
+    if (state.dir / "NO_NEW_JOBS").exists():
+        raise FixError("new jobs are paused by the user (Research Control Center: stop new jobs)")
     args = _resubmit_args(rec)
     for flag_val in extra_args or []:
         flag, _, val = flag_val.partition("=")

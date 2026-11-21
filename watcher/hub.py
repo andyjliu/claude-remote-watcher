@@ -62,6 +62,8 @@ class Hub:
         # model for the hub's own Claude turns (progress summaries); claude.tiers.hub, default opus
         t = get(cfg, "claude.tiers.hub", {}) or {}
         self.model, self.budget = str(t.get("model", "opus")), float(t.get("budget_usd", 5))
+        from .commands import Commands
+        self.commands = Commands(self)
 
     @property
     def m(self) -> dict:
@@ -72,6 +74,12 @@ class Hub:
         return now - float(self.m.get("last_cycle_epoch", 0)) >= self.interval
 
     def tick(self, force: bool = False) -> bool:
+        try:
+            self.commands.poll()
+        except NotionError as e:
+            self.state.logline(f"hub: notion error polling commands: {e}")
+        except Exception as e:  # noqa: BLE001
+            self.state.logline(f"hub: command poll error: {type(e).__name__}: {e}")
         now = datetime.now(timezone.utc).timestamp()
         if not (force or self.due(now)):
             return False
@@ -171,6 +179,7 @@ class Hub:
         self.write_source(source, status, now)
         self.write_history(source["id"], status, now)
         self.maintenance(now)
+        self.commands.start_queued(by_page, slug_of, status["gpus_used"])
         self.manage_watchers(by_page, slug_of, dirs, infos, live_by_spec)
         self.m["last_cycle"] = iso(now)
         self.state.logline(f"hub cycle: {status['gpus_used']}/{self.quota} GPUs on {','.join(counted)}, "

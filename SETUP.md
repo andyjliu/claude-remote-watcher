@@ -111,7 +111,8 @@ handles things.
 3. Dry run one cycle: `watch hub-once ~/.control-center --dry-run`, and read
    `~/.control-center/.watcher/hub_dry_run.jsonl`.
 4. `watch start --hub ~/.control-center`. Leave `hub.manage_watchers: false` until you want the hub
-   to restart spec watchers that died without `STOP`.
+   to restart spec watchers that died without `STOP`, and `hub.commands_live: false` until the
+   dashboard's dry-run commands report what you expect (docs/control-center.md §2.8).
 
 ## 8. Day to day
 

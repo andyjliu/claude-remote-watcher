@@ -155,8 +155,26 @@ groups the rows by spec and by cause.
 | Message | text | H | What the hub did, or why it failed |
 | Finished | date | H | |
 
-The hub polls for `pending` rows for its source every 90 s and claims a row before acting on it.
-Rows are never deleted.
+The hub polls for `pending` rows for its source every 90 s (`hub.commands_poll_sec`) and claims a row
+before acting on it. A row with no Source is taken by the hub whose Spec mappings place its spec on that
+cluster. Rows are never deleted. Code: `watcher/commands.py`.
+
+**Two dry-run gates.** A command runs only when its own Dry run box is off **and** `hub.commands_live: true`
+is set in `cluster.yaml` (default false). Otherwise the hub sets Status done with a Message that starts
+`[dry run: …] would …` and changes nothing. Turn `commands_live` on once the dry-run messages look right.
+
+| Action | What the hub does (in the spec's repo dir from Spec mappings) |
+| --- | --- |
+| `pause_loop` / `resume_loop` | creates / removes `.watcher/research/PAUSED` (same as `research pause` in Slack) |
+| `stop_new_jobs` / `allow_new_jobs` | creates / removes `.watcher/NO_NEW_JOBS`; the sbatch shim and the watcher's own resubmits refuse while it exists |
+| `stop_and_kill` | PAUSED + NO_NEW_JOBS, `scancel` of the spec's running and pending jobs (tagged `cc:<spec>` or submitted under its repo dir; watcher jobs excluded), then `.watcher/STOP` |
+| `start` | removes STOP / PAUSED / NO_NEW_JOBS and submits the spec's watcher if none is live |
+| `queue` | State queued with `GPU request` from Args `{"gpus": N}`; each cycle the hub starts queued specs, oldest first, once that many counted GPUs are free |
+| `unqueue` | State back to paused |
+| `summarize` | not built yet (step 6): fails with a message |
+
+The dashboard writes these rows itself (Notion connector, `notion-create-pages`) and reads them back
+through the `Recent (dashboard)` view.
 
 ### 2.9 Pings
 
@@ -311,6 +329,21 @@ Seed rows: Compute sources `babel` (`41f95cc0-892f-8196-bc6d-c17433cb8cc2`); Spe
 paused), `wsinit` (`41f95cc0-892f-81be-a51e-cab24df8743c`, done); Spec mappings for advsel and taskvec.
 Each of the three spec pages has an inline Checkpoints view filtered to its spec (appended at the end
 of the page).
+
+Saved views the dashboard reads (view-mode queries don't count against the Notion plan's hourly
+query allowance; rows and SQL mode do):
+
+| Table | View | View id |
+| --- | --- | --- |
+| Compute sources | Default view | `41f95cc0892f81e2857f000c2877b280` |
+| Specs | Default view | `41f95cc0892f81f3b7d2000c4da72efe` |
+| Checkpoints | By order (dashboard) | `41f95cc0892f819f89c8000c89c97bae` |
+| Jobs | Active (dashboard): RUNNING or PENDING | `41f95cc0892f8180aa81000cacf0ce90` |
+| Resource history | Every cycle, newest first (dashboard) | `41f95cc0892f8139ab75000c6e9efe52` |
+| Resource history | Hourly, newest first (dashboard) | `41f95cc0892f81d4b9a8000c283720c5` |
+| Commands | Recent (dashboard) | `41f95cc0892f813e81da000c11193141` |
+
+Renaming a view is fine; changing its filter or sort changes what the dashboard shows.
 
 Notes for the hub: relation values are page ids. The Notion REST API (the hub's integration) uses
 database ids for queries on API version 2022-06-28, or data source ids on 2025-09-03; the claude.ai

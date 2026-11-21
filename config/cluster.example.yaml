@@ -125,6 +125,8 @@ hub:
   counted: {general: 8}        # partition -> GPU quota that counts (utilization, GPUs used, time until dry)
   dry_run: false               # record Notion writes in <hub dir>/.watcher/hub_dry_run.jsonl instead of sending them
   manage_watchers: false       # restart a running spec's watcher chain that died without STOP (off: log only)
+  commands_live: false         # carry out dashboard commands (off: every command is a dry run that only reports)
+  commands_poll_sec: 90        # how often the hub checks the Commands table
   raw_history_days: 14         # raw Resource history rows older than this are archived; hourly rollups are kept
   jobs_keep_days: 30
   notion_token_file: ~/.config/claude-watcher/notion_token   # internal integration token (read, update, insert)
