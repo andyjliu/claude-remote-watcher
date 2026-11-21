@@ -1,0 +1,24 @@
+#!/bin/bash
+# sbatch wrapper put first on PATH for research turns (Research Control Center, docs/control-center.md).
+# - tags every job with its spec: --comment=cc:$CW_SPEC_ID, unless the call sets --comment itself
+# - refuses to submit while $CW_STATE/NO_NEW_JOBS exists (the "stop new jobs" control)
+# Then hands off to the real sbatch: the first one on PATH that is not this file.
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real=""
+IFS=: read -ra parts <<< "$PATH"
+for d in "${parts[@]}"; do
+  [ "$(cd "$d" 2>/dev/null && pwd)" = "$self_dir" ] && continue
+  if [ -x "$d/sbatch" ]; then real="$d/sbatch"; break; fi
+done
+if [ -z "$real" ]; then echo "sbatch (control-center wrapper): real sbatch not found on PATH" >&2; exit 127; fi
+if [ -n "${CW_STATE:-}" ] && [ -e "$CW_STATE/NO_NEW_JOBS" ]; then
+  echo "sbatch: new jobs paused by the user (Research Control Center: stop new jobs). Nothing was submitted." >&2
+  exit 1
+fi
+if [ -n "${CW_SPEC_ID:-}" ]; then
+  for a in "$@"; do
+    case "$a" in --comment|--comment=*) exec "$real" "$@" ;; esac
+  done
+  exec "$real" "--comment=cc:${CW_SPEC_ID}" "$@"
+fi
+exec "$real" "$@"

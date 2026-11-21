@@ -101,6 +101,18 @@ running. It starts in `.watcher/`, reads the notes, and can act on the
 experiment dir. Ask it to "leave a standing order" to change how the loop
 handles things.
 
+## 7a. Research Control Center hub (once per cluster, ~5 min)
+
+1. Notion: create an internal integration (read, update, insert content), share the Research
+   Control Center's parent page with it, and save the token:
+   `install -m 600 /dev/stdin ~/.config/claude-watcher/notion_token`.
+2. Copy the `hub:` block from `config/cluster.example.yaml` into `cluster.yaml`; fill in the
+   database ids (`docs/control-center.md` §6) and `counted` (partition → GPU quota).
+3. Dry run one cycle: `watch hub-once ~/.control-center --dry-run`, and read
+   `~/.control-center/.watcher/hub_dry_run.jsonl`.
+4. `watch start --hub ~/.control-center`. Leave `hub.manage_watchers: false` until you want the hub
+   to restart spec watchers that died without `STOP`.
+
 ## 8. Day to day
 
 - `watch status <dir>` — watcher jobs, sentinels, job table.
@@ -119,3 +131,4 @@ handles things.
 4. Confirm outbound HTTPS from compute nodes (`curl -sI https://slack.com`).
 5. `watch start <dir>`; check `.watcher/slurm/<jobid>.out` and
    `.watcher/remote_control.log`.
+6. Optional: Research Control Center hub (step 7a).

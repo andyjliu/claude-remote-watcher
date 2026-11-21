@@ -67,6 +67,10 @@ class Loop:
         self.turn_times: list[float] = []  # rolling-hour LLM budget
         self.esc = escalation.Escalations(self.state)
         self.research = Research(cfg, self.state, self.slack, self.my_id)
+        self.hub = None
+        if get(cfg, "hub.enabled", False):
+            from .hub import Hub
+            self.hub = Hub(cfg, self.state, self.slack)
         self.stop = False
         signal.signal(signal.SIGTERM, self._on_term)
 
@@ -608,10 +612,12 @@ class Loop:
             return 0
         self.ensure_successor()
         self.rc_start()
-        inbound = self.slack.start_listener()
+        # The hub only posts (budget alerts); per-dir watchers answer DMs, so the hub does not poll them.
+        inbound = False if self.hub else self.slack.start_listener()
         st.meta["slack_inbound"] = inbound
         if not st.meta.get("announced"):
-            self.slack.post(f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off'}"
+            self.slack.post(f"control-center hub up (job {self.my_id})" if self.hub else
+                            f"watcher up for {self.target} (job {self.my_id}); slack chat {'on' if inbound else 'off'}"
                             + ("; research mode on" if self.research.enabled else ""))
             st.meta["announced"] = True
         st.save()
@@ -626,6 +632,14 @@ class Loop:
                     st.logline("walltime margin reached; exiting for successor"); self.ensure_successor(); self.rc_stop(); self.research_stop(); st.save(); return 0
                 if self.my_id and int(time.time()) % 3600 < 600:
                     self.ensure_successor()
+                if self.hub:
+                    self.hub.tick()
+                    st.save()
+                    for _ in range(60):
+                        if self.stop or st.sentinel("STOP"):
+                            break
+                        time.sleep(1)
+                    continue
                 events = self.discover()
                 st.meta["last_poll"] = now_iso()
                 budget = [MAX_LLM_TURNS_PER_TICK]

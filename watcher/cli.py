@@ -112,23 +112,67 @@ def _trust_workspace(sd: Path) -> None:
     os.replace(tmp, cj)
 
 
-def cmd_start(a):
-    from .loop import job_name, sbatch_args, watcher_jobs
-    target = Path(a.dir).resolve()
-    if not target.is_dir():
-        sys.exit(f"not a directory: {target}")
+HUB_YAML = """# Hub mode: this watcher is the cluster's Research Control Center source agent (docs/control-center.md).
+# Notion database ids and the counted partitions live under `hub:` in ~/.config/claude-watcher/cluster.yaml.
+hub:
+  enabled: true
+research:
+  enabled: false
+claude:
+  remote_control:
+    enabled: false
+"""
+
+
+def start_dir(target: Path, force: bool = False) -> str | None:
+    """Submit the watcher job for a directory; returns the job id, or None if one is already live."""
+    from .loop import sbatch_args, watcher_jobs
     cfg = _prepare(target)
     sd = Path(cfg["_state"])
     (sd / "STOP").unlink(missing_ok=True)
     live = [j for j in watcher_jobs(cfg) if j["state"] in ("RUNNING", "PENDING")]
-    if live and not a.force:
-        print(f"watcher already queued/running for {target}: " + ", ".join(f"{j['id']}({j['state']})" for j in live))
-        return
+    if live and not force:
+        return None
     st = State(sd)
     st.meta.setdefault("started_at", now_iso())
     st.save()
-    jid = slurm.sbatch(sbatch_args(cfg), cwd=str(sd))
-    print(f"submitted watcher {jid} ({job_name(cfg)}) on {get(cfg, 'slurm.partition')} for {target}\nstate: {sd}")
+    return slurm.sbatch(sbatch_args(cfg), cwd=str(sd))
+
+
+def cmd_start(a):
+    from .loop import job_name, watcher_jobs
+    target = Path(a.dir).expanduser().resolve()
+    if a.hub:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".watcher").mkdir(exist_ok=True)
+        wy = target / ".watcher" / "watcher.yaml"
+        if not wy.exists() or "hub:" not in wy.read_text():
+            wy.write_text(HUB_YAML)
+    if not target.is_dir():
+        sys.exit(f"not a directory: {target}")
+    jid = start_dir(target, a.force)
+    cfg = config.load(target)
+    if jid is None:
+        live = [j for j in watcher_jobs(cfg) if j["state"] in ("RUNNING", "PENDING")]
+        print(f"watcher already queued/running for {target}: " + ", ".join(f"{j['id']}({j['state']})" for j in live))
+        return
+    print(f"submitted watcher {jid} ({job_name(cfg)}) on {get(cfg, 'slurm.partition')} for {target}\nstate: {cfg['_state']}"
+          + ("\nmode: hub (Research Control Center source agent)" if get(cfg, "hub.enabled", False) else ""))
+
+
+def cmd_hub_once(a):
+    """One hub cycle in the foreground, for testing: `watch hub-once DIR [--dry-run]`."""
+    from .hub import Hub
+    target = Path(a.dir).expanduser().resolve()
+    (target / ".watcher").mkdir(parents=True, exist_ok=True)
+    cfg = config.load(target)
+    st = State(Path(cfg["_state"]))
+    hub = Hub(cfg, st, None, dry_run=a.dry_run or None)
+    status = hub.cycle()
+    st.save()
+    print(json.dumps(status, indent=1, default=str))
+    if hub.dry:
+        print(f"dry run: Notion writes recorded in {st.dir / 'hub_dry_run.jsonl'}")
 
 
 def cmd_stop(a):
@@ -197,7 +241,9 @@ def cmd_loop(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="watch", description="Claude-driven Slurm experiment watcher")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("start", help="start watching a directory (idempotent)"); p.add_argument("dir"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_start)
+    p = sub.add_parser("start", help="start watching a directory (idempotent)"); p.add_argument("dir"); p.add_argument("--force", action="store_true")
+    p.add_argument("--hub", action="store_true", help="run this watcher as the cluster's Research Control Center hub"); p.set_defaults(f=cmd_start)
+    p = sub.add_parser("hub-once", help="run one hub cycle in the foreground"); p.add_argument("dir"); p.add_argument("--dry-run", action="store_true"); p.set_defaults(f=cmd_hub_once)
     p = sub.add_parser("stop", help="stop the watcher for a directory"); p.add_argument("dir"); p.add_argument("--now", action="store_true", help="scancel immediately"); p.set_defaults(f=cmd_stop)
     p = sub.add_parser("status", help="watcher + job table"); p.add_argument("dir"); p.add_argument("--hours", type=float, default=24, help="show jobs changed within this window (live jobs always)"); p.set_defaults(f=cmd_status)
     p = sub.add_parser("say", help="send the watcher a message (like a Slack DM)"); p.add_argument("dir"); p.add_argument("text", nargs="+"); p.set_defaults(f=cmd_say)

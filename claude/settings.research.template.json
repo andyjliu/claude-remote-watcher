@@ -29,6 +29,8 @@
       "Edit(//{{STATE}}/standing_orders.md)", "Write(//{{STATE}}/standing_orders.md)",
       "Edit(//{{STATE}}/research/**)", "Write(//{{STATE}}/research/**)",
       "Edit(//{{STATE}}/turns/**)", "Write(//{{STATE}}/turns/**)",
+      "Edit(//{{STATE}}/NO_NEW_JOBS)", "Write(//{{STATE}}/NO_NEW_JOBS)",
+      "Edit(//{{STATE}}/control_center.json)", "Write(//{{STATE}}/control_center.json)",
       "Edit(//{{CONF_DIR}}/**)", "Write(//{{CONF_DIR}}/**)",
       "Edit(//{{REPO}}/**)", "Write(//{{REPO}}/**)"
     ]

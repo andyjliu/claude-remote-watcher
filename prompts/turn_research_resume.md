@@ -16,4 +16,5 @@ allocation and all the rules still apply. Re-read files only if they may have ch
 {{JOBS}}
 ```
 
-Take one bounded action, update the handoff files, and end with the `SLACK:` / `STATUS:` footer.
+Take one bounded action, update the handoff files and `{{STATE}}/checkpoints.json` (status, summary,
+result for finished checkpoints, ETAs with `eta_as_of` now), and end with the `SLACK:` / `STATUS:` footer.

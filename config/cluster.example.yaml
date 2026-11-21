@@ -29,6 +29,7 @@ claude:
     compact:  {model: sonnet,         budget_usd: 1}   # agent_notes.md compaction
     report:   {model: sonnet,         budget_usd: 1}   # prose paragraph at the top of the daily digest (watcher.report_llm_summary)
     research: {model: opus,           budget_usd: 15}  # research-mode turns (research.enabled), run in the experiment dir
+    eta:      {model: sonnet,         budget_usd: 0.5} # research mode: refresh checkpoint ETAs while the loop waits (control center)
   # When a FAILED job matches neither the oom nor the trivial regexes, ask the `classify`
   # model which it is before spending a tier-3 turn: TRIVIAL->tier2, OOM->tier1,
   # TRANSIENT->tier0 resubmit, REAL/UNSURE->tier3.
@@ -111,4 +112,31 @@ research:
   wait_max_min: 120          # cap on any WAITING
   max_turn_failures: 3       # consecutive failed turns -> research BLOCKED
   max_turns_per_day: 60
+  eta_refresh: true          # cheap `eta` turn when a running checkpoint's ETA is >1 h old and the loop is waiting
 
+
+# Hub mode: the cluster's Research Control Center source agent (docs/control-center.md). Turned on only in
+# the hub's own directory by `watch start --hub DIR`; the keys below are shared and belong in cluster.yaml.
+hub:
+  enabled: false
+  status_interval_min: 10      # status, history, jobs, specs, checkpoints and time-until-dry writes
+  source_name: null            # Compute sources row name; default: the cluster name
+  counted: {general: 8}        # partition -> GPU quota that counts (utilization, GPUs used, time until dry)
+  dry_run: false               # record Notion writes in <hub dir>/.watcher/hub_dry_run.jsonl instead of sending them
+  manage_watchers: false       # restart a running spec's watcher chain that died without STOP (off: log only)
+  raw_history_days: 14         # raw Resource history rows older than this are archived; hourly rollups are kept
+  jobs_keep_days: 30
+  notion_token_file: ~/.config/claude-watcher/notion_token   # internal integration token (read, update, insert)
+  notion:                      # database ids (docs/control-center.md §6)
+    sources: null
+    specs: null
+    checkpoints: null
+    history: null
+    mappings: null
+    jobs: null
+    errors: null
+    commands: null
+    pings: null
+    transcripts: null
+    summaries: null
+    backlog_page: null         # spec pages are its "SPEC:" child pages
