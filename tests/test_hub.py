@@ -68,6 +68,20 @@ def test_time_until_dry_pending_and_queued_lower_bound():
     assert hd.time_until_dry(NOW, [job("9", part="preempt")], {"general"}, 8, {}, []).hours == 0
 
 
+def test_time_until_dry_running_spec_between_jobs():
+    etas = {"mav": (NOW + timedelta(hours=300), False), "old": (NOW - timedelta(hours=1), True)}
+    # a running spec with no live job still holds the queue until its ETA
+    d = hd.time_until_dry(NOW, [], {"general"}, 8, etas, [], active={"mav"})
+    assert (round(d.hours), d.lower_bound, d.detail) == (300, False, "mav ETA (between jobs)")
+    # not running (paused, done...) or an overdue ETA: no contribution
+    assert hd.time_until_dry(NOW, [], {"general"}, 8, etas, []).hours == 0
+    assert hd.time_until_dry(NOW, [], {"general"}, 8, etas, [], active={"old"}).hours == 0
+    # a job-backed ETA is not double counted, and the later end wins
+    j = job("1", start=NOW - timedelta(hours=1)); j.spec = "old"
+    d = hd.time_until_dry(NOW, [j], {"general"}, 8, etas, [], active={"mav", "old"})
+    assert round(d.hours) == 300 and "between jobs" in d.detail
+
+
 def test_spec_eta_and_overdue():
     cps = {"checkpoints": [{"status": "running", "eta": "2026-11-21T03:00-05:00"},
                            {"status": "done", "eta": "2026-11-25T03:00-05:00"}]}

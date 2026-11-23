@@ -163,18 +163,20 @@ class Hub:
         for j in jobs:
             if j.spec and (j.running or j.pending) and not j.name.startswith(self.prefix):
                 live_by_spec[j.spec] = live_by_spec.get(j.spec, 0) + 1
-        queued = []
+        queued, active = [], set()
         for pid, p in by_page.items():
             s = slug_of[pid]
             if s in skip_specs:
                 continue
             new_state = hd.derive_state(spec_dirs.get(s), live_by_spec.get(s, 0), read(p, "State"))
             self.sync_spec(p, s, spec_dirs.get(s), new_state, spec_etas.get(s), now, gpu_h.get(s))
+            if new_state == "running":
+                active.add(s)
             if new_state == "queued":
                 queued.append((s, int(read(p, "GPU request") or 0), read(p, "Est. runtime h")))
             self.check_budget(s, read(p, "Name") or s, spec_dirs.get(s), read(p, "API cap $"))
 
-        dry = hd.time_until_dry(now, jobs, counted, self.quota, spec_etas, queued)
+        dry = hd.time_until_dry(now, jobs, counted, self.quota, spec_etas, queued, active)
         status = self.status(jobs, counted, now, dry)
         self.write_source(source, status, now)
         self.write_history(source["id"], status, now)

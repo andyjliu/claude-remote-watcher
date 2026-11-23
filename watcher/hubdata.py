@@ -311,13 +311,15 @@ class Dry:
 
 
 def time_until_dry(now: datetime, jobs: list[Job], counted: set[str], quota: int, spec_etas: dict[str, tuple[datetime | None, bool]],
-                   queued: list[tuple[str, int, float | None]]) -> Dry:
+                   queued: list[tuple[str, int, float | None]], active: set[str] = frozenset()) -> Dry:
     """Hours until no job of yours is running or pending on the counted partitions.
 
     jobs: live jobs. spec_etas: slug -> (end estimate from the loop's ETAs, overdue flag); a spec with an
     entry is assumed to keep the queue busy until then, whatever its individual jobs' limits say.
     queued: (slug, GPUs requested, estimated runtime h or None) for specs queued on this source; each
-    starts once enough GPUs are free (by limit-based end times) and runs for its estimate."""
+    starts once enough GPUs are free (by limit-based end times) and runs for its estimate.
+    active: slugs of specs whose loop is running (State "running"). Their ETA counts even when they have
+    no job on a counted partition right now, so a loop between jobs does not read as "dry in 0 h"."""
     ends: list[tuple[datetime, bool, str]] = []
     cjobs = [j for j in jobs if j.partition in counted and (j.running or j.pending)]
     seen_specs = set()
@@ -331,6 +333,10 @@ def time_until_dry(now: datetime, jobs: list[Job], counted: set[str], quota: int
             continue
         end, lb = j.limit_end(now)
         ends.append((end, lb, f"job {j.id} {j.name} ({'pending, start unknown' if lb else 'time limit'})"))
+    for slug in sorted(active - seen_specs):
+        eta, overdue = spec_etas.get(slug, (None, False))
+        if eta is not None and eta > now:
+            ends.append((eta, False, f"{slug} ETA (between jobs)"))
     # queued specs: simulate GPUs freeing up by limit-based end times of running counted jobs
     frees = sorted((j.limit_end(now)[0], j.gpus) for j in cjobs if j.running)
     used = sum(j.gpus for j in cjobs if j.running)

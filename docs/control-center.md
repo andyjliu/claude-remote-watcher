@@ -97,7 +97,7 @@ explicit state).
 | CPUs used · Mem GB used | number | H | All of your jobs on the cluster |
 | Other partitions | text | H | e.g. `preempt: 5 GPU, 3 jobs; fnsw: 2 jobs` |
 | Weekly util | number (%) | H | Trailing 168 h: GPU-h on `general` ÷ (8 × 168). Uses `sacct -D`, so preempted and requeued attempts count. `preempt` and `fnsw` are excluded |
-| Hours until dry | number | H | Spec §8: hours until zero jobs remain running or pending on `general`. Uses checkpoint ETAs and `Spec ETA`, the Slurm time limit where no ETA exists, and `Est. runtime h` for queued specs |
+| Hours until dry | number | H | Spec §8: hours until zero jobs remain running or pending on `general`. Uses checkpoint ETAs and `Spec ETA` (for a running spec even while it has no job on `general`), the Slurm time limit where no ETA exists, and `Est. runtime h` for queued specs |
 | Dry is lower bound | checkbox | H | Shown as "≥ N h" |
 | Dry detail | text | H | Which job or spec sets the number |
 | Notes | text | U | |
