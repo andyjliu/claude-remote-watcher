@@ -126,7 +126,7 @@ claude:
 
 def start_dir(target: Path, force: bool = False) -> str | None:
     """Submit the watcher job for a directory; returns the job id, or None if one is already live."""
-    from .loop import sbatch_args, watcher_jobs
+    from .loop import submit_all, watcher_jobs
     cfg = _prepare(target)
     sd = Path(cfg["_state"])
     (sd / "STOP").unlink(missing_ok=True)
@@ -136,11 +136,14 @@ def start_dir(target: Path, force: bool = False) -> str | None:
     st = State(sd)
     st.meta.setdefault("started_at", now_iso())
     st.save()
-    return slurm.sbatch(sbatch_args(cfg), cwd=str(sd))
+    ids, errs = submit_all(cfg, str(sd))
+    for e in errs:
+        print(f"warning: fallback submit failed: {e}")
+    return ",".join(ids)
 
 
 def cmd_start(a):
-    from .loop import job_name, watcher_jobs
+    from .loop import job_name, partition_options, watcher_jobs
     target = Path(a.dir).expanduser().resolve()
     if a.hub:
         target.mkdir(parents=True, exist_ok=True)
@@ -156,7 +159,7 @@ def cmd_start(a):
         live = [j for j in watcher_jobs(cfg) if j["state"] in ("RUNNING", "PENDING")]
         print(f"watcher already queued/running for {target}: " + ", ".join(f"{j['id']}({j['state']})" for j in live))
         return
-    print(f"submitted watcher {jid} ({job_name(cfg)}) on {get(cfg, 'slurm.partition')} for {target}\nstate: {cfg['_state']}"
+    print(f"submitted watcher {jid} ({job_name(cfg)}) on {'/'.join(o['partition'] for o in partition_options(cfg))} for {target}\nstate: {cfg['_state']}"
           + ("\nmode: hub (Research Control Center source agent)" if get(cfg, "hub.enabled", False) else ""))
 
 
@@ -229,8 +232,9 @@ def cmd_report(a):
 
 def cmd_render(a):
     cfg = _prepare(Path(a.dir).resolve())
-    from .loop import sbatch_args
-    print("sbatch " + " ".join(sbatch_args(cfg)))
+    from .loop import partition_options, sbatch_args
+    for opt in partition_options(cfg):
+        print("sbatch " + " ".join(sbatch_args(cfg, opt=opt)))
     print(json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")}, indent=1))
 
 

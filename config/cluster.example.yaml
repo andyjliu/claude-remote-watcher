@@ -9,6 +9,8 @@ slurm:
                              # Default: $SLURM_CLUSTER_NAME, else the hostname prefix.
   partition: fnsw            # CHANGE: a cheap partition that tolerates long-lived CPU jobs
   qos: fnsw_qos              # CHANGE (or null)
+  fallback: []               # extra partitions to race, e.g. [{partition: preempt, qos: preempt_cpu_qos}]; each
+                             # handoff queues one job per partition and the first to start cancels the rest
   gres: "gpu:0"              # CHANGE: null to omit; some clusters reject 0-GPU jobs -> "gpu:1"
   cpus: 2
   mem: 4G

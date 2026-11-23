@@ -29,8 +29,19 @@ def job_name(cfg: dict) -> str:
     return f"{get(cfg, 'slurm.job_name_prefix', 'cw')}:{Path(cfg['_target']).name}"
 
 
-def sbatch_args(cfg: dict, extra: list[str] | None = None) -> list[str]:
+def partition_options(cfg: dict) -> list[dict]:
+    """[{partition, qos, gres?}, ...]: slurm.partition/qos first, then each slurm.fallback entry. The site's
+    job_submit plugin rejects comma-separated partition lists, so a fallback is a separate sibling job, not
+    `--partition=a,b`; whichever sibling starts first cancels the rest (Loop.cancel_pending_siblings)."""
     s = cfg["slurm"]
+    opts = [{"partition": s["partition"], "qos": s.get("qos"), "gres": s.get("gres")}]
+    for f in s.get("fallback") or []:
+        opts.append({"partition": f["partition"], "qos": f.get("qos"), "gres": f.get("gres", s.get("gres"))})
+    return opts
+
+
+def sbatch_args(cfg: dict, extra: list[str] | None = None, opt: dict | None = None) -> list[str]:
+    s = {**cfg["slurm"], **(opt or {})}
     args = [f"--job-name={job_name(cfg)}", f"--partition={s['partition']}", f"--cpus-per-task={s.get('cpus', 2)}",
             f"--mem={s.get('mem', '4G')}", f"--time={s['time']}", "--requeue",
             f"--output={cfg['_state']}/slurm/%j.out", "--open-mode=append"]
@@ -42,6 +53,19 @@ def sbatch_args(cfg: dict, extra: list[str] | None = None) -> list[str]:
     args += extra or []
     args.append(str(Path(cfg["_state"]) / "watcher.sbatch"))
     return args
+
+
+def submit_all(cfg: dict, cwd: str, extra: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """Submit one watcher job per partition option. Returns (job ids, errors); raises only if none submitted."""
+    ids, errs = [], []
+    for opt in partition_options(cfg):
+        try:
+            ids.append(slurm.sbatch(sbatch_args(cfg, extra, opt), cwd=cwd))
+        except RuntimeError as e:
+            errs.append(f"{opt['partition']}: {e}")
+    if not ids:
+        raise RuntimeError("; ".join(errs))
+    return ids, errs
 
 
 def watcher_jobs(cfg: dict) -> list[dict]:
@@ -98,10 +122,22 @@ class Loop:
         if pending:
             return
         try:
-            sid = slurm.sbatch(sbatch_args(self.cfg, [f"--dependency=afterany:{self.my_id}"]), cwd=str(self.state.dir))
-            self.state.logline(f"queued successor {sid} (afterany:{self.my_id})")
+            ids, errs = submit_all(self.cfg, str(self.state.dir), [f"--dependency=afterany:{self.my_id}"])
+            self.state.logline(f"queued successor {','.join(ids)} (afterany:{self.my_id})"
+                               + (f"; failed: {'; '.join(errs)}" if errs else ""))
         except RuntimeError as e:
             self.state.logline(f"could not queue successor: {e}")
+
+    def cancel_pending_siblings(self) -> None:
+        """With fallback partitions, every successor is queued once per partition; the first to start
+        cancels the others (they were queued for the same handoff and would otherwise start, lose
+        claim_or_exit, and leave no successor). Run after claim_or_exit, before ensure_successor."""
+        if not self.my_id or len(partition_options(self.cfg)) < 2:
+            return
+        for j in watcher_jobs(self.cfg):
+            if j["id"] != self.my_id and j["state"] == "PENDING":
+                slurm.run(["scancel", j["id"]])
+                self.state.logline(f"cancelled pending sibling watcher job {j['id']}")
 
     def cancel_successors(self) -> None:
         for j in watcher_jobs(self.cfg):
@@ -611,6 +647,7 @@ class Loop:
             st.logline("STOP present; exiting without chaining"); self.cancel_successors(); return 0
         if not self.claim_or_exit():
             return 0
+        self.cancel_pending_siblings()
         self.ensure_successor()
         self.rc_start()
         # The hub only posts (budget alerts); per-dir watchers answer DMs, so the hub does not poll them.
