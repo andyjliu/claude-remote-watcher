@@ -11,6 +11,7 @@ Turn contract (the last lines of every research turn's final message):
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -19,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .claude_turn import build_cmd, parse, render, turn_path
-from .config import get, tier
+from .config import REPO, get, tier
 from .state import State, now_iso
 
 STATUSES = ("WORKING", "WAITING", "BLOCKED", "DONE")
@@ -197,6 +198,9 @@ class Research:
             return res  # a finishing tick only collects; the next turn starts on a later tick
         reason = self.wake_reason()
         if reason is None:
+            eta = self.eta_reason()
+            if eta and window_sec > 15 * 60:
+                self.start_eta(eta)
             return res
         min_window = float(get(self.cfg, "research.min_window_min", 30)) * 60
         if window_sec < min_window:
@@ -226,8 +230,7 @@ class Research:
         out = turn_path(self.state, "research", "resume" if resume else "fresh")
         out.with_suffix(".prompt.md").write_text(prompt)
         cmd = build_cmd(self.cfg, self.state, "research", settings=self.state.dir / "settings.research.json", resume=resume)
-        env = dict(os.environ)
-        env.pop("ANTHROPIC_API_KEY", None)
+        env = self.turn_env()
         stdin = open(out.with_suffix(".prompt.md"))
         stdout = open(out, "w")
         stderr = open(out.with_suffix(".err"), "w")
@@ -235,7 +238,8 @@ class Research:
                                      start_new_session=True)
         for f in (stdin, stdout, stderr):
             f.close()
-        self.cur = {"out": out, "resume": resume, "deadline": time.time() + timeout, "events": events, "reason": reason}
+        self.cur = {"out": out, "resume": resume, "deadline": time.time() + timeout, "events": events, "reason": reason,
+                    "kind": "research"}
         self.m["orders_offset"] = self._orders_size()
         self.m["last_start"], self.m["last_reason"] = now_iso(), reason
         self.m["in_flight"] = True
@@ -253,6 +257,14 @@ class Research:
         res = parse(rc, stdout, stderr)
         res["path"] = str(out)
         self.proc = None
+        if self.cur.get("kind") == "eta":
+            # an ETA refresh only rewrites checkpoints.json; it never changes the loop's status, session or waits
+            self.m["in_flight"] = False
+            self.m["eta_last_end"] = time.time()
+            self.state.logline(f"eta turn done rc={rc} ok={rc == 0 and not res['quota']}")
+            self.cur = {}
+            res["status"], res["eta"] = "", True
+            return res
         self.m["in_flight"] = False
         self.m["last_end"] = time.time()
         self.state.logline(f"research turn done rc={rc} status={res['status_line'] or '<none>'} ok={res['ok']}")
@@ -293,6 +305,73 @@ class Research:
                         + (f"\nslack: {text[:400]}" if text else ""))
         self.cur = {}
         return res
+
+    # ------------------------------------------------------------ control center
+    def turn_env(self) -> dict:
+        """Env for research and eta turns: no API key (subscription billing); the control-center sbatch wrapper
+        first on PATH, which tags jobs with this dir's spec and honours the stop-new-jobs control."""
+        env = dict(os.environ)
+        env.pop("ANTHROPIC_API_KEY", None)
+        env["PATH"] = f"{REPO / 'shim'}:{env.get('PATH', '')}"
+        env["CW_STATE"] = str(self.state.dir)
+        spec = self.spec_id()
+        if spec:
+            env["CW_SPEC_ID"] = spec
+        return env
+
+    def spec_id(self) -> str | None:
+        try:
+            return json.loads((self.state.dir / "control_center.json").read_text()).get("spec_id")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def eta_reason(self, now: float | None = None) -> str | None:
+        """Why a cheap ETA-refresh turn should run now: the loop is idle-waiting (not due within 10 min) and
+        a running checkpoint's ETA is over an hour old, or there is no checkpoints.json yet to seed."""
+        if not self.enabled or self.proc is not None or not get(self.cfg, "research.eta_refresh", True):
+            return None
+        if self.sentinel("DONE").exists() or self.sentinel("PAUSED").exists() or self.blocked() is not None:
+            return None
+        now = now or time.time()
+        if self.m.get("status") != "WAITING" or float(self.m.get("wait_until", 0)) - now < 600:
+            return None
+        if now - float(self.m.get("eta_last_end", 0)) < 3600:
+            return None
+        p = self.state.dir / "checkpoints.json"
+        if not p.exists():
+            return "seed"
+        try:
+            data = json.loads(p.read_text())
+        except json.JSONDecodeError:
+            return "seed"
+        for c in data.get("checkpoints") or []:
+            if c.get("status") != "running":
+                continue
+            try:
+                d = datetime.fromisoformat(str(c.get("eta_as_of")).replace("Z", "+00:00"))
+                age = now - (d if d.tzinfo else d.astimezone()).timestamp()
+            except ValueError:
+                age = float("inf")
+            if age > 3600:
+                return "refresh"
+        return None
+
+    def start_eta(self, why: str) -> None:
+        out = turn_path(self.state, "eta", why)
+        prompt = render("turn_eta.md", TARGET=str(self.target), STATE=str(self.state.dir), NOW=now_iso(), MODE=why,
+                        PROMPT_FILES=", ".join(f"`{p}`" for p in get(self.cfg, "research.prompt_files", []) or []) or "(none)",
+                        SPEC_ID=self.spec_id() or "(not mapped yet)")
+        out.with_suffix(".prompt.md").write_text(prompt)
+        cmd = build_cmd(self.cfg, self.state, "eta", settings=self.state.dir / "settings.research.json")
+        stdin, stdout, stderr = open(out.with_suffix(".prompt.md")), open(out, "w"), open(out.with_suffix(".err"), "w")
+        self.proc = subprocess.Popen(cmd, cwd=self.target, stdin=stdin, stdout=stdout, stderr=stderr, env=self.turn_env(),
+                                     start_new_session=True)
+        for f in (stdin, stdout, stderr):
+            f.close()
+        self.cur = {"out": out, "deadline": time.time() + 15 * 60, "kind": "eta", "reason": f"eta {why}"}
+        self.m["in_flight"] = True
+        model, budget = tier(self.cfg, "eta")
+        self.state.logline(f"eta turn start ({why}) model={model} budget=${budget} -> {out.name}")
 
     def kill(self) -> None:
         if self.proc and self.proc.poll() is None:

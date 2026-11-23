@@ -114,6 +114,33 @@ Research turns use `.watcher/settings.research.json`, which is looser than the
 watcher's own: commits, branch pushes, PRs and project-env installs are allowed;
 merges, force-pushes, pushes to `main`, `rm` and `sudo` are not.
 
+## Research Control Center hub
+
+One extra watcher per cluster, the **hub**, is the cluster's source agent for the Notion Research
+Control Center (design and schema: `docs/control-center.md`). Launch it once:
+
+    watch start --hub ~/.control-center
+
+It runs no Claude turns. Every `hub.status_interval_min` (10) it reads `squeue`, `sacct` and every
+mapped repo's `.watcher/` over shared `$HOME`, then writes only the rows that changed: the Compute
+sources row (GPUs used of quota, running/pending, weekly utilization, time until dry), Resource
+history, Jobs (mapped to specs by manual override > `cc:<spec>` comment tag > WorkDir > untracked),
+Spec state/spend/GPU-h and Checkpoints (from each loop's `.watcher/checkpoints.json`). It sends a
+Slack alert when a spec's API ledger passes 80% and 100% of `budget.api_usd`.
+
+Research turns run with `shim/sbatch` first on `PATH`: it tags submissions `--comment=cc:<spec_id>`
+and refuses new submissions while `.watcher/NO_NEW_JOBS` exists. When a research loop is waiting
+and a running checkpoint's ETA is over an hour old, the watcher runs a small Sonnet `eta` turn
+($0.50 cap) that only rewrites `checkpoints.json`. The hub's own Claude turns (progress summaries)
+use `claude.tiers.hub` (default opus).
+
+**Adding a compute source.** On the new cluster: install the repo, copy the Notion token to
+`~/.config/claude-watcher/notion_token` (mode 600), add the `hub:` block from
+`config/cluster.example.yaml` to `cluster.yaml` with the same database ids and this cluster's
+`counted` partitions, check one cycle with `watch hub-once ~/.control-center --dry-run` (writes go
+to `.watcher/hub_dry_run.jsonl`), then `watch start --hub ~/.control-center`. The hub creates its
+own Compute sources row named after the cluster (or `hub.source_name`).
+
 ## Slack setup
 
 `~/.config/claude-watcher/slack_bot_token` (`xoxb-`, scopes `chat:write`,
